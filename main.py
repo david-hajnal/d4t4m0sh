@@ -2,7 +2,8 @@
 import argparse
 import os
 import sys
-from algorithms import ALGORITHMS
+sys.path.insert(0, os.path.dirname(__file__))
+from mosh_algorithms import ALGORITHMS
 
 def default_output_path(in_path: str, algo: str) -> str:
     root, ext = os.path.splitext(in_path)
@@ -41,10 +42,11 @@ def main():
 
     algo = args.algorithm
     out_path = args.output or default_output_path(in_path, algo)
+    out_path = os.path.abspath(out_path)  # <— ensure absolute path
 
     if args.verbose:
         print(f"[INFO] Algorithm: {algo}")
-        print(f"[INFO] Input: {in_path}")
+        print(f"[INFO] Input:  {os.path.abspath(in_path)}")
         print(f"[INFO] Output: {out_path}")
 
     func = ALGORITHMS[algo]
