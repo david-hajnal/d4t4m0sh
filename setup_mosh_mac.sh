@@ -89,6 +89,10 @@ except Exception as e:
     print("FFmpeg check failed:", e)
 PY
 
+# --- project convenience: videosrc folder for scanning ---
+mkdir -p videosrc
+echo "Created ./videosrc (drop input clips here to use --scan or run without -f)"
+
 echo
 echo "✅ Done. Activate with:"
 echo "   source $VENV_DIR/bin/activate"
