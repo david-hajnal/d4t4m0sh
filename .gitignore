@@ -1,2 +1,5 @@
 *.mp4
 *venv
+.idea
+.DS_Store
+mosh_algorithms/__pycache__/
