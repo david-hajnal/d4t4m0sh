@@ -111,13 +111,15 @@ def main():
                         help="[video_to_image_mosh] Duration (seconds) of the image motion clip")
     parser.add_argument("--kb", type=str, default="rotate", choices=["rotate","zoom_in"],
                         help="[video_to_image_mosh] Motion style for the image clip")
-    parser.add_argument("--postcut", type=int, default=4,
+    parser.add_argument("--postcut", type=int, default=6,
                         help="[video_to_image_mosh & UI] Drop N frames after each boundary I (stronger smear)")
+    parser.add_argument("--mosh_q", type=int, default=8,
+                    help="[mosh] MPEG-4 quantizer (higher = blockier = stronger smear); e.g., 6–12")
 
     args = parser.parse_args()
 
     # Algorithms that take multiple inputs
-    multi_algos = {"gop_multi_drop_concat"}
+    multi_algos = {"gop_multi_drop_concat", "bergman_style", "avidemux_style"}
 
     # Resolve inputs
     in_arg = args.file
@@ -186,6 +188,11 @@ def main():
             kb_mode=getattr(args, "kb", None),
             postcut=getattr(args, "postcut", None),
         )
+
+        call_params.update({
+            "postcut": args.postcut,
+            "mosh_q": args.mosh_q,
+        })
 
         # keep only the params this function actually declares
         sig = inspect.signature(func)
