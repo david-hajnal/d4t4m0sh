@@ -111,10 +111,22 @@ def main():
                         help="[video_to_image_mosh] Duration (seconds) of the image motion clip")
     parser.add_argument("--kb", type=str, default="rotate", choices=["rotate","zoom_in"],
                         help="[video_to_image_mosh] Motion style for the image clip")
-    parser.add_argument("--postcut", type=int, default=6,
-                        help="[video_to_image_mosh & UI] Drop N frames after each boundary I (stronger smear)")
-    parser.add_argument("--mosh_q", type=int, default=8,
-                    help="[mosh] MPEG-4 quantizer (higher = blockier = stronger smear); e.g., 6–12")
+        # intensity / surgery
+    parser.add_argument("--postcut", type=int, default=8, help="Drop N packets after each removed I (Avidemux-style)")
+    parser.add_argument("--postcut-rand", dest="postcut_rand", type=str, default=None,
+                        help="Randomize postcut per boundary, format A:B (integers)")
+    parser.add_argument("--drop_mode", type=str, default="all_after_first",
+                        choices=["all_after_first","boundaries_only"],
+                        help="Drop every I after the first, or only boundary I-frames")
+
+    # conversion quality (Xvid)
+    parser.add_argument("--mosh_q", type=int, default=10, help="Xvid/MPEG-4 quantizer (higher=blockier)")
+    parser.add_argument("--hold_sec", type=float, default=0.0, help="Smear hold seconds appended to each clip (except last)")
+
+    # delivery
+    parser.add_argument("--audio_from", type=str, default=None,
+                        help="Path to a source file to pull audio from when delivering MP4")
+
 
     args = parser.parse_args()
 
@@ -187,12 +199,11 @@ def main():
             img_dur=getattr(args, "img_dur", None),
             kb_mode=getattr(args, "kb", None),
             postcut=getattr(args, "postcut", None),
+            drop_mode=getattr(args, "drop_mode", None),
+            mosh_q=getattr(args, "mosh_q", None),
+            hold_sec=getattr(args, "hold_sec", None),
+            audio_from=getattr(args, "audio_from", None)            
         )
-
-        call_params.update({
-            "postcut": args.postcut,
-            "mosh_q": args.mosh_q,
-        })
 
         # keep only the params this function actually declares
         sig = inspect.signature(func)
