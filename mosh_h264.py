@@ -310,28 +310,35 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
         run_ffmpeg(cmd_after, "Extracting after segment", verbose)
         segments_to_concat.append(after_seg)
 
-    # Build concat list
-    concat_list = temp_dir / 'smear_concat.txt'
-    with open(concat_list, 'w') as f:
+    # Concat - use filter_complex instead of concat demuxer
+    # This is more robust when dealing with broken H.264 streams
+    if len(segments_to_concat) == 1:
+        # Only one segment, just copy it
+        shutil.copy(segments_to_concat[0], output_mp4)
+    else:
+        # Build filter_complex concat
+        inputs = []
         for seg in segments_to_concat:
-            f.write(f"file '{seg.absolute()}'\n")
+            inputs.extend(['-i', str(seg)])
 
-    # Concat
-    cmd_concat = [
-        'ffmpeg', '-y',
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', str(concat_list),
-        '-c', 'copy',
-        str(output_mp4)
-    ]
-    run_ffmpeg(cmd_concat, f"Concatenating {len(segments_to_concat)} segments", verbose)
+        # Build concat filter string: [0:v][1:v][2:v]...concat=n=N:v=1:a=0[v]
+        concat_inputs = ''.join([f'[{i}:v]' for i in range(len(segments_to_concat))])
+        filter_str = f'{concat_inputs}concat=n={len(segments_to_concat)}:v=1:a=0[v]'
+
+        cmd_concat = [
+            'ffmpeg', '-y',
+            *inputs,
+            '-filter_complex', filter_str,
+            '-map', '[v]',
+            '-c:v', 'copy',
+            str(output_mp4)
+        ]
+        run_ffmpeg(cmd_concat, f"Concatenating {len(segments_to_concat)} segments", verbose)
 
     # Cleanup
     before_seg.unlink(missing_ok=True)
     repeat_seg.unlink(missing_ok=True)
     after_seg.unlink(missing_ok=True)
-    concat_list.unlink(missing_ok=True)
 
     print(f"Smear boost complete")
 
