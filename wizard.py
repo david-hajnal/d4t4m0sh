@@ -92,6 +92,15 @@ ALGORITHM_INFO = {
         "inputs": "two",
         "outputs": ".avi and .mp4",
         "options": ["fps", "width", "mosh_q", "gop_len", "no_iframe_window", "postcut", "repeat_boost", "repeat_times"]
+    },
+    "mosh_zoom_oneclip": {
+        "name": "Melting Zoom (Single Clip)",
+        "category": "creative",
+        "desc": "Artificial zoom + datamosh on a single clip. Freezes a frame, generates zoom ramp, forces P-cascade for 'melting zoom' effect.",
+        "use_case": "Create trippy zoom effects that melt/smear. Great for beat drops, time stretching, or psychedelic visuals.",
+        "inputs": "single",
+        "outputs": ".mp4",
+        "options": ["fps", "width", "zoom_q", "zoom_t", "zoom_dur", "zoom_tail", "zoom_direction", "deliver_crf"]
     }
 }
 
@@ -213,6 +222,43 @@ OPTION_INFO = {
         "default": 5,
         "prompt": "Number of repeat cycles",
         "help": "How many times to repeat the boost segment. More = heavier smear. Try 5-10 for extreme."
+    },
+    "zoom_q": {
+        "type": "int",
+        "default": 3,
+        "prompt": "MPEG-4 quantizer for intermediates",
+        "help": "1-31. Lower = higher quality for zoom concat. Use 3-5 for clean zoom, 8-12 for grainier effect."
+    },
+    "zoom_t": {
+        "type": "str",
+        "default": "00:00:05.000",
+        "prompt": "Mosh start timestamp (HH:MM:SS.mmm or seconds)",
+        "help": "When to start the zoom effect. Format: HH:MM:SS.mmm or just seconds (e.g. '5' or '5.5')."
+    },
+    "zoom_dur": {
+        "type": "float",
+        "default": 1.0,
+        "prompt": "Zoom duration (seconds)",
+        "help": "How long the zoom ramp lasts. Try 0.5-2.0 seconds."
+    },
+    "zoom_tail": {
+        "type": "float",
+        "default": 1.0,
+        "prompt": "P-only tail duration (seconds)",
+        "help": "How long the P-cascade continues after zoom. Longer = more smear. Try 1.0-3.0."
+    },
+    "zoom_direction": {
+        "type": "choice",
+        "default": "out",
+        "choices": ["out", "in"],
+        "prompt": "Zoom direction",
+        "help": "out: push in (image gets bigger), in: pull out (image gets smaller)"
+    },
+    "deliver_crf": {
+        "type": "int",
+        "default": 18,
+        "prompt": "Final H.264 CRF (quality)",
+        "help": "Lower = higher quality for final MP4. 18 (high), 23 (balanced), 28 (smaller file)."
     }
 }
 
@@ -466,6 +512,8 @@ def configure_options(algo_id: str, algo_info: Dict[str, Any]) -> Dict[str, Any]
             config[opt_name] = prompt_float(opt["prompt"], opt["default"], opt["help"])
         elif opt["type"] == "bool":
             config[opt_name] = prompt_bool(opt["prompt"], opt["default"])
+        elif opt["type"] == "str":
+            config[opt_name] = prompt_text(opt["prompt"], opt["default"], opt["help"])
         elif opt["type"] == "choice":
             config[opt_name] = prompt_choice(opt["prompt"], opt["choices"], opt["default"], True)
         elif opt["type"] == "range":
@@ -523,6 +571,34 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
                     cmd.extend(["--repeat-times", str(value)])
                 elif key == "postcut":
                     cmd.extend(["--postcut", str(value)])
+                elif key == "verbose" and value:
+                    cmd.append("-v")
+                else:
+                    cmd.extend([f"--{key}", str(value)])
+
+        return cmd
+
+    # Special handling for mosh_zoom_oneclip tool
+    if algo_id == "mosh_zoom_oneclip":
+        cmd = ["python3", "mosh_zoom_oneclip.py"]
+        cmd.extend(["--in", input_files[0]])
+        cmd.extend(["--out", output])
+
+        # Add zoom-specific options
+        for key, value in config.items():
+            if value is not None and value != "" and value is not False:
+                if key == "zoom_q":
+                    cmd.extend(["--q", str(value)])
+                elif key == "zoom_t":
+                    cmd.extend(["--t", str(value)])
+                elif key == "zoom_dur":
+                    cmd.extend(["--zoom-dur", str(value)])
+                elif key == "zoom_tail":
+                    cmd.extend(["--tail", str(value)])
+                elif key == "zoom_direction":
+                    cmd.extend(["--zoom-direction", str(value)])
+                elif key == "deliver_crf":
+                    cmd.extend(["--deliver-crf", str(value)])
                 elif key == "verbose" and value:
                     cmd.append("-v")
                 else:
