@@ -101,6 +101,15 @@ ALGORITHM_INFO = {
         "inputs": "single",
         "outputs": ".mp4",
         "options": ["fps", "width", "zoom_q", "zoom_t", "zoom_dur", "zoom_tail", "zoom_direction", "deliver_crf"]
+    },
+    "mosh_h264": {
+        "name": "H.264 Long-GOP Transition (Modern)",
+        "category": "transitions",
+        "desc": "Modern H.264 datamosh with IDR strip and SEI removal. Better compatibility than Xvid with extreme artifacts.",
+        "use_case": "Best of both worlds: extreme glitch effects with modern H.264 compression and universal playback.",
+        "inputs": "two",
+        "outputs": ".mp4",
+        "options": ["fps", "width", "h264_crf", "gop_len", "no_iframe_window", "postcut", "repeat_boost", "repeat_times"]
     }
 }
 
@@ -259,6 +268,12 @@ OPTION_INFO = {
         "default": 18,
         "prompt": "Final H.264 CRF (quality)",
         "help": "Lower = higher quality for final MP4. 18 (high), 23 (balanced), 28 (smaller file)."
+    },
+    "h264_crf": {
+        "type": "int",
+        "default": 23,
+        "prompt": "H.264 CRF (quality)",
+        "help": "Lower = higher quality. 18 (visually lossless), 23 (balanced), 28 (smaller file). Try 20-25."
     }
 }
 
@@ -606,6 +621,34 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
 
         return cmd
 
+    # Special handling for mosh_h264 tool
+    if algo_id == "mosh_h264":
+        cmd = ["python3", "mosh_h264.py"]
+        cmd.extend(["--a", input_files[0]])
+        cmd.extend(["--b", input_files[1]])
+
+        # Add h264-specific options
+        for key, value in config.items():
+            if value is not None and value != "" and value is not False:
+                if key == "h264_crf":
+                    cmd.extend(["--crf", str(value)])
+                elif key == "gop_len":
+                    cmd.extend(["--gop-len", str(value)])
+                elif key == "no_iframe_window":
+                    cmd.extend(["--no-iframe-window", str(value)])
+                elif key == "repeat_boost":
+                    cmd.extend(["--repeat-boost", str(value)])
+                elif key == "repeat_times":
+                    cmd.extend(["--repeat-times", str(value)])
+                elif key == "postcut":
+                    cmd.extend(["--postcut", str(value)])
+                elif key == "verbose" and value:
+                    cmd.append("-v")
+                else:
+                    cmd.extend([f"--{key}", str(value)])
+
+        return cmd
+
     # Standard main.py command
     cmd = ["python3", "main.py", "-a", algo_id]
 
@@ -650,8 +693,8 @@ def main():
         # Step 3: Configure options
         config = configure_options(algo_id, algo_info)
 
-        # Step 4: Select output (skip for mosh - it has fixed output names)
-        if algo_id == "mosh":
+        # Step 4: Select output (skip for mosh/mosh_h264 - they have fixed output names)
+        if algo_id in ("mosh", "mosh_h264"):
             output = None
         else:
             output = select_output(algo_info, input_files)
@@ -666,8 +709,10 @@ def main():
             print(f"           • {os.path.basename(f)}")
         if output:
             print(f"Output:    {output}")
-        else:
+        elif algo_id == "mosh":
             print(f"Outputs:   out_longgop.avi, mosh_core.avi, mosh_final.avi, mosh_final.mp4")
+        elif algo_id == "mosh_h264":
+            print(f"Outputs:   out_longgop_h264.mp4, mosh_core_h264.mp4, mosh_final_h264.mp4")
 
         if config:
             print(f"\nOptions:")
