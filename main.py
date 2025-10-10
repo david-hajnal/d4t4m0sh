@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from mosh_algorithms import ALGORITHMS
 
-VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm")
+VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".gif")
 
 def default_output_path(in_path: str, algo: str) -> str:
     root, ext = os.path.splitext(in_path)

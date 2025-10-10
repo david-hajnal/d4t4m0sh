@@ -1,0 +1,626 @@
+#!/usr/bin/env python3
+"""
+Interactive wizard for d4t4m0sh
+Guides users through algorithm selection and configuration with detailed explanations.
+"""
+import os
+import sys
+import subprocess
+from typing import List, Dict, Any, Optional
+
+VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".gif")
+
+# Algorithm metadata with detailed descriptions
+ALGORITHM_INFO = {
+    "inspect_gop": {
+        "name": "GOP Inspector",
+        "category": "analysis",
+        "desc": "Analyze video GOP (Group of Pictures) structure. Shows frame types (I/P/B) to understand keyframe distribution.",
+        "use_case": "Use this first to see what you're working with - how many I-frames, GOP length, etc.",
+        "inputs": "single",
+        "outputs": ".csv",
+        "options": []
+    },
+    "gop_iframe_drop": {
+        "name": "Simple I-Frame Drop",
+        "category": "basic",
+        "desc": "Removes I-frames (keyframes) from a single video. Re-encodes with FFmpeg.",
+        "use_case": "Quick datamosh effect on one clip. Good for testing, but Avidemux methods are stronger.",
+        "inputs": "single",
+        "outputs": ".mp4/.avi",
+        "options": ["gop", "codec", "verbose"]
+    },
+    "gop_multi_drop_concat": {
+        "name": "Multi-Clip Concat & Drop",
+        "category": "basic",
+        "desc": "Concatenates multiple clips, forces keyframes at boundaries, then drops them. Supports smear holds and random postcut.",
+        "use_case": "Blend multiple clips together with motion smearing. Good for music videos.",
+        "inputs": "multiple",
+        "outputs": ".mp4/.avi",
+        "options": ["gop", "codec", "postcut", "postcut_rand", "hold_sec", "verbose"]
+    },
+    "ui_keyframe_editor": {
+        "name": "Interactive Keyframe Editor",
+        "category": "advanced",
+        "desc": "Curses-based TUI for frame-by-frame control. Toggle I-frames, jump between keyframes, preview frames, adjust postcut.",
+        "use_case": "Surgical precision - manually choose which keyframes to remove for artistic control.",
+        "inputs": "single",
+        "outputs": ".mp4/.avi",
+        "options": ["gop", "codec", "verbose"]
+    },
+    "video_to_image_mosh": {
+        "name": "Video → Image Mosh",
+        "category": "creative",
+        "desc": "Smears video motion INTO a still image. Creates trippy effect where the image seems to move.",
+        "use_case": "Turn a portrait or artwork into an animated, glitchy piece with motion from your video.",
+        "inputs": "single",
+        "outputs": ".mp4/.avi",
+        "options": ["image", "img_dur", "kb_mode", "gop", "codec", "verbose"]
+    },
+    "image_to_video_mosh": {
+        "name": "Image → Video Mosh",
+        "category": "creative",
+        "desc": "Creates motion from a still image, then smears it into video. Image appears to flow/melt.",
+        "use_case": "Animate a static image with artificial motion (rotation, zoom), then datamosh it.",
+        "inputs": "single",
+        "outputs": ".mp4/.avi",
+        "options": ["image", "img_dur", "kb_mode", "gop", "codec", "verbose"]
+    },
+    "avidemux_style": {
+        "name": "Avidemux-Style Surgery (manual prep)",
+        "category": "avidemux",
+        "desc": "Pure packet surgery, NO re-encode. Works on pre-converted Xvid AVI files. Strongest artifacts.",
+        "use_case": "Old-school, maximum glitch. You must first convert clips to Xvid with convert_to_xvid.sh.",
+        "inputs": "multiple",
+        "outputs": ".avi (video only)",
+        "options": ["postcut", "postcut_rand", "drop_mode", "verbose"]
+    },
+    "avidemux_style_all": {
+        "name": "Avidemux-Style All-In-One",
+        "category": "avidemux",
+        "desc": "One-shot: convert → concat → packet surgery → deliver. Can output AVI or MP4 with audio.",
+        "use_case": "Easiest way to get strong Avidemux-style mosh. Handles everything automatically.",
+        "inputs": "multiple",
+        "outputs": ".avi or .mp4",
+        "options": ["mosh_q", "gop", "hold_sec", "postcut", "postcut_rand", "drop_mode", "codec", "audio_from", "verbose"]
+    },
+    "mosh": {
+        "name": "P-Cascade Bloom Transition",
+        "category": "transitions",
+        "desc": "Heavy 'P-cascade bloom' datamosh transition (big smear) between two clips. Creates dramatic melting effect where clip B begins.",
+        "use_case": "Perfect for music video transitions - strong motion smear that drags content from first clip into second.",
+        "inputs": "two",
+        "outputs": ".avi and .mp4",
+        "options": ["fps", "width", "mosh_q", "gop_len", "no_iframe_window", "repeat_boost", "repeat_times"]
+    }
+}
+
+# Option metadata with detailed help
+OPTION_INFO = {
+    "gop": {
+        "type": "int",
+        "default": 250,
+        "prompt": "GOP size (keyframe interval)",
+        "help": "Larger = fewer I-frames = stronger mosh. For MPEG-4, cap around 600. Try 300-600 for strong effects."
+    },
+    "codec": {
+        "type": "choice",
+        "default": "libx264",
+        "choices": ["libx264", "h264_videotoolbox", "mpeg4"],
+        "prompt": "Video codec for final encode",
+        "help": "libx264 (software, best quality), h264_videotoolbox (macOS hardware), mpeg4 (MPEG-4 ASP)"
+    },
+    "postcut": {
+        "type": "int",
+        "default": 8,
+        "prompt": "Postcut (frames to drop after each removed I-frame)",
+        "help": "How many frames/packets to drop after removing a keyframe. Higher = stronger smear (try 8-14)."
+    },
+    "postcut_rand": {
+        "type": "range",
+        "default": None,
+        "prompt": "Random postcut range (e.g. 6:12)",
+        "help": "Randomize postcut per boundary. Format: MIN:MAX. Overrides --postcut. Adds unpredictability."
+    },
+    "drop_mode": {
+        "type": "choice",
+        "default": "all_after_first",
+        "choices": ["all_after_first", "boundaries_only"],
+        "prompt": "Drop mode strategy",
+        "help": "all_after_first: remove ALL I-frames after first (max smear). boundaries_only: only at clip joins."
+    },
+    "mosh_q": {
+        "type": "int",
+        "default": 10,
+        "prompt": "Mosh quality (Xvid/MPEG-4 quantizer)",
+        "help": "1-31. Higher = blockier/grainier = more datamosh artifact. Try 8-12 for strong effects."
+    },
+    "hold_sec": {
+        "type": "float",
+        "default": 0.0,
+        "prompt": "Smear hold duration (seconds)",
+        "help": "Duplicate last frame of each clip (except final). Creates 'freeze smear' at joins. Try 0.5-1.5."
+    },
+    "audio_from": {
+        "type": "file",
+        "default": None,
+        "prompt": "Audio source file (optional)",
+        "help": "Path to file to extract audio from. Only for avidemux_style_all when outputting MP4."
+    },
+    "image": {
+        "type": "file",
+        "default": None,
+        "prompt": "Still image path",
+        "help": "Path to image file (jpg, png) for video↔image mosh algorithms."
+    },
+    "img_dur": {
+        "type": "float",
+        "default": 3.0,
+        "prompt": "Image motion clip duration (seconds)",
+        "help": "How long the generated image motion clip should be. Try 3-10 seconds."
+    },
+    "kb_mode": {
+        "type": "choice",
+        "default": "rotate",
+        "choices": ["rotate", "zoom_in"],
+        "prompt": "Image motion style",
+        "help": "rotate: gentle rotation, zoom_in: slow zoom effect. Affects how the image 'moves'."
+    },
+    "verbose": {
+        "type": "bool",
+        "default": False,
+        "prompt": "Verbose output",
+        "help": "Show detailed FFmpeg logs during processing."
+    },
+    "fps": {
+        "type": "int",
+        "default": 30,
+        "prompt": "Target framerate",
+        "help": "Normalize both clips to this FPS. Standard rates: 24, 30, 60."
+    },
+    "width": {
+        "type": "int",
+        "default": 1280,
+        "prompt": "Target width (height auto-scaled)",
+        "help": "Width in pixels. Height maintains aspect ratio. Common: 1280, 1920."
+    },
+    "gop_len": {
+        "type": "int",
+        "default": 9999,
+        "prompt": "GOP length (max keyframe distance)",
+        "help": "Very high value = single long GOP = maximum smear. Use 9999 for extreme effects."
+    },
+    "no_iframe_window": {
+        "type": "float",
+        "default": 1.5,
+        "prompt": "I-frame strip window duration (seconds)",
+        "help": "How long after join to strip I-frames. Longer = longer melting effect. Try 1.0-3.0."
+    },
+    "repeat_boost": {
+        "type": "float",
+        "default": 0.5,
+        "prompt": "Repeat segment duration (seconds)",
+        "help": "Duration after join to repeat for smear boost. Amplifies the transition. Try 0.3-1.0."
+    },
+    "repeat_times": {
+        "type": "int",
+        "default": 3,
+        "prompt": "Number of repeat cycles",
+        "help": "How many times to repeat the boost segment. More = heavier smear. Try 2-5."
+    }
+}
+
+def clear_screen():
+    """Clear terminal screen."""
+    os.system('clear' if os.name != 'nt' else 'cls')
+
+def print_header(title: str):
+    """Print styled header."""
+    print("\n" + "="*70)
+    print(f"  {title}")
+    print("="*70 + "\n")
+
+def print_section(title: str):
+    """Print section divider."""
+    print(f"\n{'─'*70}")
+    print(f"  {title}")
+    print(f"{'─'*70}\n")
+
+def scan_videos(dirpath: str) -> List[str]:
+    """Scan directory for video files."""
+    if not os.path.isdir(dirpath):
+        return []
+    videos = []
+    for name in sorted(os.listdir(dirpath)):
+        p = os.path.join(dirpath, name)
+        if os.path.isfile(p) and name.lower().endswith(VIDEO_EXTS):
+            videos.append(p)
+    return videos
+
+def prompt_choice(prompt: str, choices: List[str], default: Optional[str] = None, show_help: bool = True) -> str:
+    """Present menu of choices, return selected."""
+    while True:
+        print(f"\n{prompt}")
+        for i, choice in enumerate(choices, 1):
+            marker = " (default)" if default and choice == default else ""
+            print(f"  [{i}] {choice}{marker}")
+        if default:
+            print(f"\nPress ENTER for default ({default}), or enter number:")
+        else:
+            print("\nEnter number:")
+
+        inp = input("> ").strip()
+        if not inp and default:
+            return default
+        try:
+            idx = int(inp) - 1
+            if 0 <= idx < len(choices):
+                return choices[idx]
+            else:
+                print(f"❌ Invalid choice. Enter 1-{len(choices)}")
+        except ValueError:
+            print("❌ Please enter a number")
+
+def prompt_text(prompt: str, default: Optional[str] = None, help_text: Optional[str] = None) -> str:
+    """Prompt for text input."""
+    if help_text:
+        print(f"\n💡 {help_text}")
+    if default:
+        print(f"\n{prompt} (default: {default})")
+    else:
+        print(f"\n{prompt}")
+
+    inp = input("> ").strip()
+    if not inp and default:
+        return default
+    return inp
+
+def prompt_int(prompt: str, default: int, help_text: Optional[str] = None) -> int:
+    """Prompt for integer input."""
+    while True:
+        result = prompt_text(prompt, str(default), help_text)
+        try:
+            return int(result)
+        except ValueError:
+            print("❌ Please enter a valid number")
+
+def prompt_float(prompt: str, default: float, help_text: Optional[str] = None) -> float:
+    """Prompt for float input."""
+    while True:
+        result = prompt_text(prompt, str(default), help_text)
+        try:
+            return float(result)
+        except ValueError:
+            print("❌ Please enter a valid number")
+
+def prompt_bool(prompt: str, default: bool = False) -> bool:
+    """Prompt for yes/no."""
+    default_str = "y" if default else "n"
+    result = prompt_text(f"{prompt} (y/n)", default_str)
+    return result.lower() in ('y', 'yes', 'true', '1')
+
+def select_algorithm() -> str:
+    """Interactive algorithm selection with categories."""
+    clear_screen()
+    print_header("d4t4m0sh Interactive Wizard")
+
+    # Group by category
+    categories = {
+        "analysis": [],
+        "basic": [],
+        "advanced": [],
+        "creative": [],
+        "avidemux": [],
+        "transitions": []
+    }
+
+    for algo_id, info in ALGORITHM_INFO.items():
+        categories[info["category"]].append((algo_id, info))
+
+    print("📋 Available Algorithms (grouped by category):\n")
+
+    all_choices = []
+    category_names = {
+        "analysis": "🔍 Analysis Tools",
+        "basic": "⚡ Basic Datamosh",
+        "advanced": "🎯 Advanced Control",
+        "creative": "🎨 Creative Effects",
+        "avidemux": "💥 Avidemux-Style (Strongest)",
+        "transitions": "🌊 Transitions (P-Cascade)"
+    }
+
+    idx = 1
+    for cat in ["analysis", "basic", "advanced", "creative", "avidemux", "transitions"]:
+        print(f"\n{category_names[cat]}:")
+        for algo_id, info in categories[cat]:
+            print(f"  [{idx}] {info['name']}")
+            print(f"      {info['desc']}")
+            print(f"      💭 {info['use_case']}")
+            all_choices.append(algo_id)
+            idx += 1
+
+    print("\n" + "─"*70)
+    while True:
+        try:
+            choice_idx = int(input("\nSelect algorithm number: ").strip()) - 1
+            if 0 <= choice_idx < len(all_choices):
+                selected = all_choices[choice_idx]
+                print(f"\n✓ Selected: {ALGORITHM_INFO[selected]['name']}")
+                return selected
+            else:
+                print(f"❌ Invalid choice. Enter 1-{len(all_choices)}")
+        except (ValueError, KeyboardInterrupt):
+            print("❌ Please enter a valid number")
+
+def select_files(algo_info: Dict[str, Any], videosrc: str = "videosrc") -> List[str]:
+    """Select input files based on algorithm requirements."""
+    print_section("Input Selection")
+
+    videos = scan_videos(videosrc)
+    if not videos:
+        print(f"❌ No videos found in '{videosrc}/' directory.")
+        print(f"   Place video files ({', '.join(VIDEO_EXTS)}) in that folder and try again.")
+        sys.exit(1)
+
+    print(f"Found {len(videos)} video(s) in {videosrc}/:\n")
+    for i, v in enumerate(videos, 1):
+        size_mb = os.path.getsize(v) / (1024*1024)
+        print(f"  [{i}] {os.path.basename(v)} ({size_mb:.1f} MB)")
+
+    if algo_info["inputs"] == "single":
+        print("\n💡 This algorithm processes ONE video file.")
+        while True:
+            try:
+                choice = input("\nSelect file number (or ENTER for #1): ").strip()
+                idx = 0 if not choice else int(choice) - 1
+                if 0 <= idx < len(videos):
+                    selected = videos[idx]
+                    print(f"✓ Selected: {os.path.basename(selected)}")
+                    return [selected]
+                print(f"❌ Invalid. Enter 1-{len(videos)}")
+            except ValueError:
+                print("❌ Please enter a valid number")
+    elif algo_info["inputs"] == "two":
+        print("\n💡 This algorithm requires EXACTLY TWO video files (clip A → clip B).")
+
+        # Select first clip
+        while True:
+            try:
+                choice = input("\nSelect FIRST clip (A) number: ").strip()
+                idx_a = int(choice) - 1
+                if 0 <= idx_a < len(videos):
+                    break
+                print(f"❌ Invalid. Enter 1-{len(videos)}")
+            except ValueError:
+                print("❌ Please enter a valid number")
+
+        # Select second clip
+        while True:
+            try:
+                choice = input("Select SECOND clip (B) number: ").strip()
+                idx_b = int(choice) - 1
+                if 0 <= idx_b < len(videos):
+                    if idx_b == idx_a:
+                        print("⚠️  Warning: Using same clip twice. Continue? (y/n)")
+                        if input("> ").strip().lower() not in ('y', 'yes'):
+                            continue
+                    break
+                print(f"❌ Invalid. Enter 1-{len(videos)}")
+            except ValueError:
+                print("❌ Please enter a valid number")
+
+        selected = [videos[idx_a], videos[idx_b]]
+        print(f"✓ Selected transition: {os.path.basename(selected[0])} → {os.path.basename(selected[1])}")
+        return selected
+    else:
+        print("\n💡 This algorithm can process MULTIPLE videos.")
+        print("   Enter numbers separated by commas in desired order (e.g. 3,1,2)")
+        print("   Or press ENTER to use all files in current order.")
+
+        while True:
+            choice = input("\nSelect files: ").strip()
+            if not choice:
+                print(f"✓ Selected all {len(videos)} files in order")
+                return videos
+
+            try:
+                indices = [int(x.strip()) - 1 for x in choice.split(",")]
+                if all(0 <= i < len(videos) for i in indices):
+                    selected = [videos[i] for i in indices]
+                    print(f"✓ Selected {len(selected)} file(s):")
+                    for f in selected:
+                        print(f"  • {os.path.basename(f)}")
+                    return selected
+                print(f"❌ Invalid indices. Use 1-{len(videos)}")
+            except ValueError:
+                print("❌ Invalid format. Use comma-separated numbers (e.g. 1,3,2)")
+
+def configure_options(algo_id: str, algo_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Interactive configuration of algorithm options."""
+    print_section("Configuration")
+
+    options = algo_info["options"]
+    if not options:
+        print("💡 This algorithm has no configurable options.")
+        return {}
+
+    config = {}
+
+    print(f"Configure {algo_info['name']}:\n")
+
+    for opt_name in options:
+        if opt_name not in OPTION_INFO:
+            continue
+
+        opt = OPTION_INFO[opt_name]
+
+        if opt["type"] == "int":
+            config[opt_name] = prompt_int(opt["prompt"], opt["default"], opt["help"])
+        elif opt["type"] == "float":
+            config[opt_name] = prompt_float(opt["prompt"], opt["default"], opt["help"])
+        elif opt["type"] == "bool":
+            config[opt_name] = prompt_bool(opt["prompt"], opt["default"])
+        elif opt["type"] == "choice":
+            config[opt_name] = prompt_choice(opt["prompt"], opt["choices"], opt["default"], True)
+        elif opt["type"] == "range":
+            result = prompt_text(opt["prompt"] + " (or ENTER to skip)", "skip", opt["help"])
+            if result != "skip":
+                config[opt_name] = result
+        elif opt["type"] == "file":
+            result = prompt_text(opt["prompt"] + " (or ENTER to skip)", "", opt["help"])
+            if result:
+                config[opt_name] = result
+
+    return config
+
+def select_output(algo_info: Dict[str, Any], input_files: List[str]) -> str:
+    """Select output file path."""
+    print_section("Output")
+
+    # Suggest output based on first input
+    first_input = os.path.basename(input_files[0])
+    root, _ = os.path.splitext(first_input)
+
+    suggested_ext = ".avi" if "avidemux" in algo_info["category"] else ".mp4"
+    if algo_info["outputs"] == ".csv":
+        suggested_ext = ".csv"
+
+    suggested = f"{root}.moshed{suggested_ext}"
+
+    print(f"💡 Recommended extension: {algo_info['outputs']}")
+    output = prompt_text(f"Output filename", suggested,
+                        "Save to current directory. Use .avi for strongest artifacts, .mp4 for compatibility.")
+
+    return output
+
+def build_command(algo_id: str, input_files: List[str], output: str, config: Dict[str, Any]) -> List[str]:
+    """Build the command from configuration."""
+    # Special handling for mosh tool
+    if algo_id == "mosh":
+        cmd = ["python3", "mosh.py"]
+        cmd.extend(["--a", input_files[0]])
+        cmd.extend(["--b", input_files[1]])
+
+        # Add mosh-specific options
+        for key, value in config.items():
+            if value is not None and value != "":
+                # Convert option names
+                if key == "mosh_q":
+                    cmd.extend(["--q", str(value)])
+                elif key == "gop_len":
+                    cmd.extend(["--gop-len", str(value)])
+                elif key == "no_iframe_window":
+                    cmd.extend(["--no-iframe-window", str(value)])
+                elif key == "repeat_boost":
+                    cmd.extend(["--repeat-boost", str(value)])
+                elif key == "repeat_times":
+                    cmd.extend(["--repeat-times", str(value)])
+                else:
+                    cmd.extend([f"--{key}", str(value)])
+
+        return cmd
+
+    # Standard main.py command
+    cmd = ["python3", "main.py", "-a", algo_id]
+
+    # Add inputs
+    if len(input_files) == 1:
+        cmd.extend(["-f", input_files[0]])
+    else:
+        cmd.extend(["-f", ",".join(input_files)])
+
+    # Add output
+    cmd.extend(["-o", output])
+
+    # Add options
+    for key, value in config.items():
+        # Skip None, empty strings, and False boolean values
+        if value is None or value == "" or value is False:
+            continue
+
+        if key == "verbose" and value:
+            cmd.append("-v")
+        elif key == "postcut_rand":
+            # Special case: postcut_rand uses hyphen in main.py
+            cmd.extend(["--postcut-rand", str(value)])
+        elif key == "kb_mode":
+            cmd.extend(["--kb", str(value)])
+        else:
+            # Keep underscores - main.py uses underscores for most args
+            cmd.extend([f"--{key}", str(value)])
+
+    return cmd
+
+def main():
+    """Main wizard flow."""
+    try:
+        # Step 1: Select algorithm
+        algo_id = select_algorithm()
+        algo_info = ALGORITHM_INFO[algo_id]
+
+        # Step 2: Select input files
+        input_files = select_files(algo_info)
+
+        # Step 3: Configure options
+        config = configure_options(algo_id, algo_info)
+
+        # Step 4: Select output (skip for mosh - it has fixed output names)
+        if algo_id == "mosh":
+            output = None
+        else:
+            output = select_output(algo_info, input_files)
+
+        # Step 5: Review and confirm
+        clear_screen()
+        print_header("Configuration Summary")
+
+        print(f"Algorithm: {algo_info['name']}")
+        print(f"Input(s):  {len(input_files)} file(s)")
+        for f in input_files:
+            print(f"           • {os.path.basename(f)}")
+        if output:
+            print(f"Output:    {output}")
+        else:
+            print(f"Outputs:   out_longgop.avi, mosh_core.avi, mosh_final.avi, mosh_final.mp4")
+
+        if config:
+            print(f"\nOptions:")
+            for key, value in config.items():
+                print(f"  {key}: {value}")
+
+        # Build command
+        cmd = build_command(algo_id, input_files, output, config)
+
+        print(f"\n{'─'*70}")
+        print("Command to execute:")
+        print(f"{'─'*70}")
+        print(" ".join(cmd))
+        print(f"{'─'*70}\n")
+
+        # Confirm
+        if not prompt_bool("Execute now?", True):
+            print("\n❌ Cancelled. You can run the command above manually later.")
+            return
+
+        # Execute
+        print("\n🚀 Starting processing...\n")
+        result = subprocess.run(cmd)
+
+        if result.returncode == 0:
+            if output:
+                print(f"\n✅ Success! Output saved to: {output}")
+            else:
+                print(f"\n✅ Success! Outputs created in working directory.")
+        else:
+            print(f"\n❌ Processing failed with exit code {result.returncode}")
+            sys.exit(result.returncode)
+
+    except KeyboardInterrupt:
+        print("\n\n❌ Cancelled by user.")
+        sys.exit(130)
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

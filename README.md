@@ -42,6 +42,21 @@ You can use the provided `mosh-venv/` virtual environment or set up your own.
     pip install -r requirements.txt
     ```
 
+## Quick Start (Interactive Wizard)
+
+**New users: try the wizard first!** It guides you through algorithm selection and options with detailed explanations.
+
+```bash
+python wizard.py
+```
+
+The wizard will:
+- Show all algorithms grouped by category with descriptions
+- Explain what each algorithm does and when to use it
+- Guide you through file selection
+- Configure options with helpful tooltips
+- Show command summary before execution
+
 # Features
 
 - Multiple algorithms (pick via -a <name>):
@@ -64,15 +79,23 @@ You can use the provided `mosh-venv/` virtual environment or set up your own.
 
 - macOS-friendly: works with Homebrew FFmpeg; prefers software x264 for MP4 delivery.
 
-# Usage 
+# Usage
 
+## Option 1: Interactive Wizard (Recommended for beginners)
+
+```bash
+python wizard.py
 ```
+
+## Option 2: Command Line
+
+```bash
 python main.py -a <algorithm> [-f "file1,file2,..."] -o out.ext [options]
 ```
 
 * -a algorithm name (see Features)
 
-* -f comma-separated inputs; if omitted, you’ll select from ./videosrc
+* -f comma-separated inputs; if omitted, you'll select from ./videosrc
 
 * -o output path (.avi recommended for strongest artifacts)
 
