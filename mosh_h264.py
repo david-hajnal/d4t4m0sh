@@ -325,15 +325,20 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
         concat_inputs = ''.join([f'[{i}:v]' for i in range(len(segments_to_concat))])
         filter_str = f'{concat_inputs}concat=n={len(segments_to_concat)}:v=1:a=0[v]'
 
+        # Note: We have to re-encode here since filter_complex doesn't support codec copy
+        # Use high quality H.264 settings to preserve glitches
         cmd_concat = [
             'ffmpeg', '-y',
             *inputs,
             '-filter_complex', filter_str,
             '-map', '[v]',
-            '-c:v', 'copy',
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',  # Fast encoding
+            '-qp', '0',  # Lossless to preserve artifacts
+            '-pix_fmt', 'yuv420p',
             str(output_mp4)
         ]
-        run_ffmpeg(cmd_concat, f"Concatenating {len(segments_to_concat)} segments", verbose)
+        run_ffmpeg(cmd_concat, f"Concatenating {len(segments_to_concat)} segments (re-encode)", verbose)
 
     # Cleanup
     before_seg.unlink(missing_ok=True)
