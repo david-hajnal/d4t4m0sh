@@ -273,6 +273,19 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
 
     segments_to_concat = []
 
+    # Helper to check if segment has valid video stream
+    def has_video_stream(path):
+        try:
+            cmd = ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                   '-show_entries', 'stream=codec_type', '-of', 'json', str(path)]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                return False
+            data = json.loads(result.stdout)
+            return len(data.get('streams', [])) > 0
+        except:
+            return False
+
     # Before: [0, segment_start]
     if segment_start > 0.01:
         cmd_before = [
@@ -283,7 +296,10 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
             str(before_seg)
         ]
         run_ffmpeg(cmd_before, "Extracting before segment", verbose)
-        segments_to_concat.append(before_seg)
+        if has_video_stream(before_seg):
+            segments_to_concat.append(before_seg)
+        else:
+            print(f"Warning: Before segment is empty, skipping")
 
     # Repeat: [segment_start, segment_end]
     cmd_repeat = [
@@ -294,6 +310,12 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
         str(repeat_seg)
     ]
     run_ffmpeg(cmd_repeat, "Extracting repeat segment", verbose)
+
+    # Validate repeat segment has video
+    if not has_video_stream(repeat_seg):
+        print(f"Warning: Repeat segment is empty, falling back to copy input")
+        shutil.copy(input_mp4, output_mp4)
+        return
 
     # Add repeat segment N times
     for _ in range(repeat_times):
@@ -308,7 +330,10 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
             str(after_seg)
         ]
         run_ffmpeg(cmd_after, "Extracting after segment", verbose)
-        segments_to_concat.append(after_seg)
+        if has_video_stream(after_seg):
+            segments_to_concat.append(after_seg)
+        else:
+            print(f"Warning: After segment is empty, skipping")
 
     # Concat - use filter_complex instead of concat demuxer
     # This is more robust when dealing with broken H.264 streams
