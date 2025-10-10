@@ -250,20 +250,40 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
     segment_start = join_time_sec
     segment_end = join_time_sec + repeat_boost
 
+    # Get total duration to validate segments
+    total_duration = get_duration(input_mp4)
+
+    # If repeat segment would be empty or invalid, just copy the input
+    if segment_start >= total_duration or repeat_boost <= 0.01:
+        print(f"Warning: Cannot repeat segment (start={segment_start:.3f}s >= duration={total_duration:.3f}s)")
+        print(f"Copying input to output without smear boost")
+        shutil.copy(input_mp4, output_mp4)
+        return
+
+    # Adjust segment_end if it exceeds duration
+    if segment_end > total_duration:
+        segment_end = total_duration
+        repeat_boost = segment_end - segment_start
+        print(f"Adjusted repeat_boost to {repeat_boost:.3f}s (video ends before planned segment)")
+
     # Extract segments
     before_seg = temp_dir / 'before_seg.mp4'
     repeat_seg = temp_dir / 'repeat_seg.mp4'
     after_seg = temp_dir / 'after_seg.mp4'
 
+    segments_to_concat = []
+
     # Before: [0, segment_start]
-    cmd_before = [
-        'ffmpeg', '-y', '-i', str(input_mp4),
-        '-ss', '0',
-        '-t', str(segment_start),
-        '-c', 'copy',
-        str(before_seg)
-    ]
-    run_ffmpeg(cmd_before, "Extracting before segment", verbose)
+    if segment_start > 0.01:
+        cmd_before = [
+            'ffmpeg', '-y', '-i', str(input_mp4),
+            '-ss', '0',
+            '-t', str(segment_start),
+            '-c', 'copy',
+            str(before_seg)
+        ]
+        run_ffmpeg(cmd_before, "Extracting before segment", verbose)
+        segments_to_concat.append(before_seg)
 
     # Repeat: [segment_start, segment_end]
     cmd_repeat = [
@@ -275,22 +295,26 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
     ]
     run_ffmpeg(cmd_repeat, "Extracting repeat segment", verbose)
 
+    # Add repeat segment N times
+    for _ in range(repeat_times):
+        segments_to_concat.append(repeat_seg)
+
     # After: [segment_end, end]
-    cmd_after = [
-        'ffmpeg', '-y', '-i', str(input_mp4),
-        '-ss', str(segment_end),
-        '-c', 'copy',
-        str(after_seg)
-    ]
-    run_ffmpeg(cmd_after, "Extracting after segment", verbose)
+    if segment_end < total_duration - 0.01:
+        cmd_after = [
+            'ffmpeg', '-y', '-i', str(input_mp4),
+            '-ss', str(segment_end),
+            '-c', 'copy',
+            str(after_seg)
+        ]
+        run_ffmpeg(cmd_after, "Extracting after segment", verbose)
+        segments_to_concat.append(after_seg)
 
     # Build concat list
     concat_list = temp_dir / 'smear_concat.txt'
     with open(concat_list, 'w') as f:
-        f.write(f"file '{before_seg.absolute()}'\n")
-        for _ in range(repeat_times):
-            f.write(f"file '{repeat_seg.absolute()}'\n")
-        f.write(f"file '{after_seg.absolute()}'\n")
+        for seg in segments_to_concat:
+            f.write(f"file '{seg.absolute()}'\n")
 
     # Concat
     cmd_concat = [
@@ -301,7 +325,7 @@ def repeat_smear_segment_h264(input_mp4, output_mp4, join_time_sec, repeat_boost
         '-c', 'copy',
         str(output_mp4)
     ]
-    run_ffmpeg(cmd_concat, f"Concatenating segments (1 + {repeat_times} + 1)", verbose)
+    run_ffmpeg(cmd_concat, f"Concatenating {len(segments_to_concat)} segments", verbose)
 
     # Cleanup
     before_seg.unlink(missing_ok=True)
