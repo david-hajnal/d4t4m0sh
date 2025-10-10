@@ -85,13 +85,13 @@ ALGORITHM_INFO = {
         "options": ["mosh_q", "gop", "hold_sec", "postcut", "postcut_rand", "drop_mode", "codec", "audio_from", "verbose"]
     },
     "mosh": {
-        "name": "P-Cascade Bloom Transition",
+        "name": "P-Cascade Bloom Transition (Packet Surgery)",
         "category": "transitions",
-        "desc": "Heavy 'P-cascade bloom' datamosh transition (big smear) between two clips. Creates dramatic melting effect where clip B begins.",
-        "use_case": "Perfect for music video transitions - strong motion smear that drags content from first clip into second.",
+        "desc": "EXTREME 'P-cascade bloom' datamosh transition using packet surgery. Creates dramatic melting effect where clip B begins.",
+        "use_case": "Maximum artifact strength for music video transitions - pure packet manipulation for extreme smear effects.",
         "inputs": "two",
         "outputs": ".avi and .mp4",
-        "options": ["fps", "width", "mosh_q", "gop_len", "no_iframe_window", "repeat_boost", "repeat_times"]
+        "options": ["fps", "width", "mosh_q", "gop_len", "no_iframe_window", "postcut", "repeat_boost", "repeat_times"]
     }
 }
 
@@ -133,7 +133,13 @@ OPTION_INFO = {
         "type": "int",
         "default": 10,
         "prompt": "Mosh quality (Xvid/MPEG-4 quantizer)",
-        "help": "1-31. Higher = blockier/grainier = more datamosh artifact. Try 8-12 for strong effects."
+        "help": "1-31. Higher = blockier/grainier = more datamosh artifact. Try 10-14 for strong effects."
+    },
+    "postcut": {
+        "type": "int",
+        "default": 12,
+        "prompt": "Postcut (packets to drop after I-frame removal)",
+        "help": "How many packets to drop after removing each I-frame. Higher = stronger smear (try 10-20 for extreme)."
     },
     "hold_sec": {
         "type": "float",
@@ -192,9 +198,9 @@ OPTION_INFO = {
     },
     "no_iframe_window": {
         "type": "float",
-        "default": 1.5,
+        "default": 2.0,
         "prompt": "I-frame strip window duration (seconds)",
-        "help": "How long after join to strip I-frames. Longer = longer melting effect. Try 1.0-3.0."
+        "help": "How long after join to strip I-frames. Longer = longer melting effect. Try 2.0-4.0 for extreme."
     },
     "repeat_boost": {
         "type": "float",
@@ -204,9 +210,9 @@ OPTION_INFO = {
     },
     "repeat_times": {
         "type": "int",
-        "default": 3,
+        "default": 5,
         "prompt": "Number of repeat cycles",
-        "help": "How many times to repeat the boost segment. More = heavier smear. Try 2-5."
+        "help": "How many times to repeat the boost segment. More = heavier smear. Try 5-10 for extreme."
     }
 }
 
@@ -515,6 +521,10 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
                     cmd.extend(["--repeat-boost", str(value)])
                 elif key == "repeat_times":
                     cmd.extend(["--repeat-times", str(value)])
+                elif key == "postcut":
+                    cmd.extend(["--postcut", str(value)])
+                elif key == "verbose" and value:
+                    cmd.append("-v")
                 else:
                     cmd.extend([f"--{key}", str(value)])
 
