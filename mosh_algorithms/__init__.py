@@ -6,8 +6,8 @@ from .gop_multi_drop_concat import process as gop_multi_drop_concat
 from .ui_keyframe_editor import process as ui_keyframe_editor
 from .video_to_image_mosh import process as video_to_image_mosh 
 from .image_to_video_mosh import process as image_to_video_mosh
-from .bergman_style import process as bergman_style
 from .avidemux_style import process as avidemux_style
+from .avidemux_style_all import process as avidemux_style_all
 
 ALGORITHMS = {
     "gop_iframe_drop": gop_iframe_drop,
@@ -18,6 +18,6 @@ ALGORITHMS = {
     "ui_keyframe_editor": ui_keyframe_editor,
     "video_to_image_mosh": video_to_image_mosh,
     "image_to_video_mosh": image_to_video_mosh,
-    "bergman_style": bergman_style,
     "avidemux_style": avidemux_style,
+    "avidemux_style_all": avidemux_style_all,
 }

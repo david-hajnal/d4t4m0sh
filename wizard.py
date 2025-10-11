@@ -110,24 +110,6 @@ ALGORITHM_INFO = {
         "inputs": "two",
         "outputs": ".mp4",
         "options": ["fps", "width", "h264_crf", "gop_len", "no_iframe_window", "postcut", "repeat_boost", "repeat_times"]
-    },
-    "ts_mosh": {
-        "name": "MPEG-TS Packet-Loss Mosh",
-        "category": "advanced",
-        "desc": "Creates datamosh by deleting Transport Stream packets in a time window. Pure packet corruption without re-encoding.",
-        "use_case": "Simulate network packet loss for realistic video corruption. Works on single clips with precise time control.",
-        "inputs": "single",
-        "outputs": ".mp4 or .avi",
-        "options": ["ts_format", "vbitrate", "keyint", "start_ms", "duration_ms", "ts_pps", "ts_pid", "xvid_q", "fps", "verbose"]
-    },
-    "aviglitch_mosh": {
-        "name": "AviGlitch-Style Packet Mosh",
-        "category": "advanced",
-        "desc": "Direct AVI packet manipulation using PyAV. I-frame removal (smear) + P-frame duplication (bloom). No re-encoding.",
-        "use_case": "Classic AviGlitch workflow without Ruby. Best with MPEG-4 ASP AVI. Use --prep to auto-convert any format.",
-        "inputs": "single",
-        "outputs": ".avi",
-        "options": ["aviglitch_prep", "prep_q", "prep_gop_ag", "prep_fps", "drop_start", "drop_end", "dup_at", "dup_count", "verbose"]
     }
 }
 
@@ -292,103 +274,6 @@ OPTION_INFO = {
         "default": 23,
         "prompt": "H.264 CRF (quality)",
         "help": "Lower = higher quality. 18 (visually lossless), 23 (balanced), 28 (smaller file). Try 20-25."
-    },
-    "vbitrate": {
-        "type": "str",
-        "default": "3M",
-        "prompt": "Video bitrate (e.g. 3M, 5M)",
-        "help": "Bitrate for MPEG-TS encoding. Higher = better quality, larger file. Use 3M-8M."
-    },
-    "keyint": {
-        "type": "int",
-        "default": 240,
-        "prompt": "Keyframe interval (GOP length)",
-        "help": "Frames between keyframes. Higher = longer GOP = stronger mosh potential. Try 120-500."
-    },
-    "start_ms": {
-        "type": "int",
-        "default": 5000,
-        "prompt": "Corruption start time (milliseconds)",
-        "help": "When to start dropping TS packets. E.g. 5000 = 5 seconds into video."
-    },
-    "duration_ms": {
-        "type": "int",
-        "default": 1200,
-        "prompt": "Corruption duration (milliseconds)",
-        "help": "How long to drop packets. Longer = more extreme corruption. Try 800-2000ms."
-    },
-    "ts_pps": {
-        "type": "str",
-        "default": "auto",
-        "prompt": "TS packets per second (auto or number)",
-        "help": "'auto' derives from bitrate. Or specify numeric value for manual control."
-    },
-    "ts_pid": {
-        "type": "str",
-        "default": None,
-        "prompt": "Target PID (hex like 0x100, or leave empty)",
-        "help": "Optional: drop only this video PID to preserve audio. Leave empty to drop all packets."
-    },
-    "ts_format": {
-        "type": "choice",
-        "default": "mp4",
-        "choices": ["mp4", "avi"],
-        "prompt": "Output format",
-        "help": "mp4: codec-copy remux (fast, preserves corruption). avi: Xvid re-encode (mosh-friendly, blockier)."
-    },
-    "xvid_q": {
-        "type": "int",
-        "default": 3,
-        "prompt": "Xvid quality (for AVI output)",
-        "help": "1-31, lower=better. Use 3-5 for clean, 8-12 for grainier effect. Only applies to AVI output."
-    },
-    "aviglitch_prep": {
-        "type": "bool",
-        "default": False,
-        "prompt": "Auto-convert to MPEG-4 ASP AVI first?",
-        "help": "Convert input to glitch-friendly format (MPEG-4 ASP, long GOP, no B-frames) before moshing."
-    },
-    "prep_q": {
-        "type": "int",
-        "default": 3,
-        "prompt": "Prep quality (1-31, lower=better)",
-        "help": "Quality for prep conversion. 3 (high quality), 5 (balanced), 8-12 (grainier/blockier)."
-    },
-    "prep_gop_ag": {
-        "type": "int",
-        "default": 300,
-        "prompt": "Prep GOP length",
-        "help": "Keyframe interval for prep. Higher = longer GOP = stronger mosh potential. Try 300-600."
-    },
-    "prep_fps": {
-        "type": "int",
-        "default": 24,
-        "prompt": "Prep FPS",
-        "help": "Frame rate for prep conversion. Common: 24, 30, 60."
-    },
-    "drop_start": {
-        "type": "float",
-        "default": None,
-        "prompt": "I-frame drop window start (seconds)",
-        "help": "Start time to remove keyframes (creates smear). Leave empty to skip I-frame removal."
-    },
-    "drop_end": {
-        "type": "float",
-        "default": None,
-        "prompt": "I-frame drop window end (seconds)",
-        "help": "End time for keyframe removal window. Must be > drop_start."
-    },
-    "dup_at": {
-        "type": "float",
-        "default": None,
-        "prompt": "P-frame duplication start time (seconds)",
-        "help": "When to start duplicating P-frames (creates bloom/echo). Leave empty to skip duplication."
-    },
-    "dup_count": {
-        "type": "int",
-        "default": 12,
-        "prompt": "Number of P-frame duplicates",
-        "help": "How many times to duplicate the P-frame. More = stronger bloom. Try 8-20."
     }
 }
 
@@ -757,72 +642,6 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
                     cmd.extend(["--repeat-times", str(value)])
                 elif key == "postcut":
                     cmd.extend(["--postcut", str(value)])
-                elif key == "verbose" and value:
-                    cmd.append("-v")
-                else:
-                    cmd.extend([f"--{key}", str(value)])
-
-        return cmd
-
-    # Special handling for ts_mosh tool
-    if algo_id == "ts_mosh":
-        cmd = ["python3", "ts_mosh.py"]
-        cmd.extend(["--in", input_files[0]])
-        cmd.extend(["--out", output])
-
-        # Add ts_mosh-specific options
-        for key, value in config.items():
-            if value is not None and value != "" and value is not False:
-                if key == "ts_format":
-                    cmd.extend(["--format", str(value)])
-                elif key == "vbitrate":
-                    cmd.extend(["--vbitrate", str(value)])
-                elif key == "keyint":
-                    cmd.extend(["--keyint", str(value)])
-                elif key == "start_ms":
-                    cmd.extend(["--start-ms", str(value)])
-                elif key == "duration_ms":
-                    cmd.extend(["--duration-ms", str(value)])
-                elif key == "ts_pps":
-                    cmd.extend(["--pps", str(value)])
-                elif key == "ts_pid" and value:
-                    cmd.extend(["--pid", str(value)])
-                elif key == "xvid_q":
-                    cmd.extend(["--xvid-q", str(value)])
-                elif key == "fps":
-                    cmd.extend(["--fps", str(value)])
-                elif key == "verbose" and value:
-                    cmd.append("-v")
-                else:
-                    cmd.extend([f"--{key}", str(value)])
-
-        return cmd
-
-    # Special handling for aviglitch_mosh tool
-    if algo_id == "aviglitch_mosh":
-        cmd = ["python3", "aviglitch_mosh.py"]
-        cmd.extend(["--in", input_files[0]])
-        cmd.extend(["--out", output])
-
-        # Add aviglitch-specific options
-        for key, value in config.items():
-            if value is not None and value != "" and value is not False:
-                if key == "aviglitch_prep" and value:
-                    cmd.append("--prep")
-                elif key == "prep_q":
-                    cmd.extend(["--prep-q", str(value)])
-                elif key == "prep_gop_ag":
-                    cmd.extend(["--prep-gop", str(value)])
-                elif key == "prep_fps":
-                    cmd.extend(["--prep-fps", str(value)])
-                elif key == "drop_start":
-                    cmd.extend(["--drop-start", str(value)])
-                elif key == "drop_end":
-                    cmd.extend(["--drop-end", str(value)])
-                elif key == "dup_at":
-                    cmd.extend(["--dup-at", str(value)])
-                elif key == "dup_count":
-                    cmd.extend(["--dup-count", str(value)])
                 elif key == "verbose" and value:
                     cmd.append("-v")
                 else:
