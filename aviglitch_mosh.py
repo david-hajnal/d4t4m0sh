@@ -181,19 +181,59 @@ def remove_iframes_and_duplicate_pframes(
             print("[INFO] Copying audio stream")
 
     time_base = video_stream.time_base
+    fps = video_stream.average_rate or 24
+    # Calculate frame ticks: how many time_base ticks per frame
+    from fractions import Fraction
+    frame_ticks = max(1, int(round((Fraction(1, 1) / fps) / time_base)))
+
+    if verbose:
+        print(f"[INFO] Time base: {time_base}, FPS: {fps}, Frame ticks: {frame_ticks}")
+
+    # Monotonic timestamp counters (in time_base ticks)
+    next_pts = None
+    next_dts = None
+
     first_keyframe_seen = False
     iframes_dropped = 0
     pframes_duplicated = 0
     dup_done = False
     total_packets = 0
 
+    def stamp_and_mux(pkt):
+        """Stamp packet with monotonic timestamps and mux."""
+        nonlocal next_pts, next_dts
+
+        # Initialize counters from first packet if needed
+        if next_pts is None or next_dts is None:
+            base = pkt.pts if pkt.pts is not None else 0
+            next_pts = base
+            next_dts = pkt.dts if pkt.dts is not None else base
+
+        # Get incoming timestamps or generate new ones
+        in_pts = pkt.pts if pkt.pts is not None else next_pts + frame_ticks
+        in_dts = pkt.dts if pkt.dts is not None else next_dts + frame_ticks
+
+        # Enforce strictly increasing timestamps for the muxer
+        in_dts = max(in_dts, next_dts + frame_ticks)
+        in_pts = max(in_pts, next_pts + frame_ticks)
+
+        pkt.pts = in_pts
+        pkt.dts = in_dts
+        pkt.time_base = time_base
+        pkt.stream = out_video_stream
+
+        out_container.mux(pkt)
+        next_pts = in_pts
+        next_dts = in_dts
+
     # Process video packets
     for packet in in_container.demux(video_stream):
-        if packet.dts is None:
+        if packet.dts is None and packet.pts is None:
+            # Skip header/flush packets
             continue
 
         total_packets += 1
-        t = float(packet.dts * time_base)
+        t = float((packet.dts if packet.dts is not None else 0) * time_base)
 
         # --- I-frame removal logic ---
         if packet.is_keyframe:
@@ -210,6 +250,9 @@ def remove_iframes_and_duplicate_pframes(
                         print(f"[DROP] I-frame at t={t:.3f}s")
                     continue
 
+        # Write original packet with proper timestamps
+        stamp_and_mux(packet)
+
         # --- P-frame duplication logic ---
         # Check if this is the packet to duplicate
         should_duplicate = (not dup_done and
@@ -219,18 +262,33 @@ def remove_iframes_and_duplicate_pframes(
 
         if should_duplicate:
             if verbose:
-                print(f"[DUP] P-frame duplication at t={t:.3f}s")
-                print(f"[WARNING] P-frame duplication not yet fully supported in this version")
+                print(f"[DUP] P-frame duplication at t={t:.3f}s, creating {dup_count} duplicates")
 
-            # For now, just write the packet once
-            # TODO: Fix PyAV packet duplication - muxing duplicates causes "Invalid argument" error
-            packet.stream = out_video_stream
-            out_container.mux(packet)
+            # Create duplicates with advancing timestamps
+            dup_count_actual = min(dup_count, 20)  # Limit to prevent excessive duplication
+
+            # Get packet data for duplication
+            packet_data = bytes(packet)
+
+            for i in range(dup_count_actual):
+                # Create a new packet with same data but new timestamps
+                dup = av.Packet(len(packet_data))
+                # Write data into packet buffer
+                dup_buffer = memoryview(dup)
+                dup_buffer[:] = packet_data
+
+                # Set timestamps - advance by one frame each time
+                dup.pts = next_pts + frame_ticks
+                dup.dts = next_dts + frame_ticks
+                dup.time_base = time_base
+                dup.stream = out_video_stream
+
+                out_container.mux(dup)
+                next_pts = dup.pts
+                next_dts = dup.dts
+                pframes_duplicated += 1
+
             dup_done = True
-        else:
-            # Write original packet normally
-            packet.stream = out_video_stream
-            out_container.mux(packet)
 
     # Copy audio packets
     if audio_stream and out_audio_stream:
