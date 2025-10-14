@@ -617,6 +617,53 @@ def select_files(algo_info: Dict[str, Any], videosrc: str = "videosrc") -> List[
             except ValueError:
                 print("❌ Invalid format. Use comma-separated numbers (e.g. 1,3,2)")
 
+def configure_pass_params(pass_num: int) -> Dict[str, Any]:
+    """Configure parameters for a single mosh pass."""
+    print(f"\n{'─'*70}")
+    print(f"  Pass {pass_num} Configuration")
+    print(f"{'─'*70}\n")
+
+    pass_config = {}
+
+    # I-frame drop window
+    print("💡 I-frame removal creates smear effects")
+    has_drop = prompt_bool("Configure I-frame removal for this pass?", default=True)
+
+    if has_drop:
+        while True:
+            drop_start = prompt_float("I-frame drop start (seconds)", default=2.0,
+                                     help_text="Start time to remove keyframes")
+            drop_end = prompt_float("I-frame drop end (seconds)", default=4.0,
+                                   help_text="End time for keyframe removal")
+            if drop_end > drop_start:
+                pass_config["drop_start"] = drop_start
+                pass_config["drop_end"] = drop_end
+                break
+            print("❌ Drop end must be greater than drop start")
+
+    # P-frame duplication
+    print("\n💡 P-frame duplication creates bloom/echo effects")
+    has_dup = prompt_bool("Configure P-frame duplication for this pass?", default=False)
+
+    if has_dup:
+        dup_at = prompt_float("P-frame duplication start time (seconds)", default=3.0,
+                             help_text="When to start duplicating P-frames")
+        dup_count = prompt_int("Number of P-frame duplicates", default=12,
+                              help_text="More = stronger bloom. Try 8-20")
+        pass_config["dup_at"] = dup_at
+        pass_config["dup_count"] = dup_count
+
+    # Validate at least one operation
+    if not has_drop and not has_dup:
+        print("⚠️  Warning: At least one operation (drop or dup) required. Enabling I-frame removal.")
+        drop_start = prompt_float("I-frame drop start (seconds)", default=2.0)
+        drop_end = prompt_float("I-frame drop end (seconds)", default=4.0)
+        pass_config["drop_start"] = drop_start
+        pass_config["drop_end"] = drop_end
+
+    return pass_config
+
+
 def configure_options(algo_id: str, algo_info: Dict[str, Any]) -> Dict[str, Any]:
     """Interactive configuration of algorithm options."""
     print_section("Configuration")
@@ -861,6 +908,94 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
 
     return cmd
 
+def execute_multipass_aviglitch(input_files: List[str], base_config: Dict[str, Any], passes: List[Dict[str, Any]], final_output: str):
+    """Execute multiple aviglitch_mosh passes in sequence."""
+    print("\n🚀 Starting multi-pass processing...\n")
+
+    # Generate intermediate filenames
+    root, ext = os.path.splitext(final_output)
+    intermediate_files = []
+
+    current_input = input_files[0]
+    success = True
+
+    for i, pass_config in enumerate(passes, 1):
+        # Determine output path
+        if i == len(passes):
+            # Final pass uses user-specified output name
+            pass_output = final_output
+        else:
+            # Intermediate passes use _passN naming
+            pass_output = f"{root}_pass{i}{ext}"
+            intermediate_files.append(pass_output)
+
+        print(f"{'─'*70}")
+        print(f"  Pass {i}/{len(passes)}: {os.path.basename(current_input)} → {os.path.basename(pass_output)}")
+        print(f"{'─'*70}\n")
+
+        # Build command for this pass
+        cmd = ["python3", "aviglitch_mosh.py"]
+        cmd.extend(["--in", current_input])
+        cmd.extend(["--out", pass_output])
+
+        # Only apply prep on first pass
+        if i == 1 and base_config.get("aviglitch_prep"):
+            cmd.append("--prep")
+            if "prep_q" in base_config:
+                cmd.extend(["--prep-q", str(base_config["prep_q"])])
+            if "prep_gop_ag" in base_config:
+                cmd.extend(["--prep-gop", str(base_config["prep_gop_ag"])])
+            if "prep_fps" in base_config:
+                cmd.extend(["--prep-fps", str(base_config["prep_fps"])])
+
+        # Add pass-specific mosh params
+        if "drop_start" in pass_config:
+            cmd.extend(["--drop-start", str(pass_config["drop_start"])])
+            cmd.extend(["--drop-end", str(pass_config["drop_end"])])
+        if "dup_at" in pass_config:
+            cmd.extend(["--dup-at", str(pass_config["dup_at"])])
+            cmd.extend(["--dup-count", str(pass_config["dup_count"])])
+
+        # Add verbose if configured
+        if base_config.get("verbose"):
+            cmd.append("-v")
+
+        print(f"Command: {' '.join(cmd)}\n")
+
+        # Execute pass
+        result = subprocess.run(cmd)
+
+        if result.returncode != 0:
+            print(f"\n❌ Pass {i} failed with exit code {result.returncode}")
+            success = False
+            break
+
+        print(f"\n✓ Pass {i} completed: {pass_output}\n")
+
+        # Next pass uses this output as input
+        current_input = pass_output
+
+    if success:
+        print(f"\n{'='*70}")
+        print(f"✅ All {len(passes)} passes completed successfully!")
+        print(f"{'='*70}")
+        print(f"\nFinal output: {final_output}")
+
+        if intermediate_files:
+            print(f"\nIntermediate files:")
+            for f in intermediate_files:
+                print(f"  • {f}")
+
+            cleanup = prompt_bool("\nDelete intermediate files?", default=False)
+            if cleanup:
+                for f in intermediate_files:
+                    if os.path.exists(f):
+                        os.remove(f)
+                        print(f"  Deleted: {f}")
+    else:
+        sys.exit(1)
+
+
 def main():
     """Main wizard flow."""
     try:
@@ -873,6 +1008,31 @@ def main():
 
         # Step 3: Configure options
         config = configure_options(algo_id, algo_info)
+
+        # Step 3.5: Check for multi-pass (aviglitch_mosh only)
+        multipass_enabled = False
+        pass_configs = []
+
+        if algo_id == "aviglitch_mosh":
+            print_section("Multi-Pass Configuration")
+            print("💡 Multi-pass mode applies multiple rounds of moshing to the same clip.")
+            print("   Each pass can have different I-frame drop and P-frame duplication settings.")
+            print("   Conversion/prep settings are applied once on the first pass.\n")
+
+            multipass_enabled = prompt_bool("Enable multi-pass mode?", default=False)
+
+            if multipass_enabled:
+                while True:
+                    num_passes = prompt_int("Number of passes", default=2,
+                                           help_text="How many times to mosh this clip (2-5 recommended)")
+                    if 2 <= num_passes <= 10:
+                        break
+                    print("❌ Please enter 2-10 passes")
+
+                # Collect configuration for each pass
+                for i in range(1, num_passes + 1):
+                    pass_config = configure_pass_params(i)
+                    pass_configs.append(pass_config)
 
         # Step 4: Select output (skip for mosh/mosh_h264 - they have fixed output names)
         if algo_id in ("mosh", "mosh_h264"):
@@ -888,44 +1048,75 @@ def main():
         print(f"Input(s):  {len(input_files)} file(s)")
         for f in input_files:
             print(f"           • {os.path.basename(f)}")
-        if output:
+
+        if multipass_enabled:
+            print(f"Mode:      Multi-pass ({len(pass_configs)} passes)")
             print(f"Output:    {output}")
-        elif algo_id == "mosh":
-            print(f"Outputs:   out_longgop.avi, mosh_core.avi, mosh_final.avi, mosh_final.mp4")
-        elif algo_id == "mosh_h264":
-            print(f"Outputs:   out_longgop_h264.mp4, mosh_core_h264.mp4, mosh_final_h264.mp4")
 
-        if config:
-            print(f"\nOptions:")
-            for key, value in config.items():
-                print(f"  {key}: {value}")
+            if config:
+                print(f"\nBase Options (applied to all passes):")
+                for key, value in config.items():
+                    if key not in ("drop_start", "drop_end", "dup_at", "dup_count"):
+                        print(f"  {key}: {value}")
 
-        # Build command
-        cmd = build_command(algo_id, input_files, output, config)
-
-        print(f"\n{'─'*70}")
-        print("Command to execute:")
-        print(f"{'─'*70}")
-        print(" ".join(cmd))
-        print(f"{'─'*70}\n")
-
-        # Confirm
-        if not prompt_bool("Execute now?", True):
-            print("\n❌ Cancelled. You can run the command above manually later.")
-            return
-
-        # Execute
-        print("\n🚀 Starting processing...\n")
-        result = subprocess.run(cmd)
-
-        if result.returncode == 0:
-            if output:
-                print(f"\n✅ Success! Output saved to: {output}")
-            else:
-                print(f"\n✅ Success! Outputs created in working directory.")
+            print(f"\nPass Configurations:")
+            for i, pconf in enumerate(pass_configs, 1):
+                print(f"  Pass {i}:")
+                for key, value in pconf.items():
+                    print(f"    {key}: {value}")
         else:
-            print(f"\n❌ Processing failed with exit code {result.returncode}")
-            sys.exit(result.returncode)
+            if output:
+                print(f"Output:    {output}")
+            elif algo_id == "mosh":
+                print(f"Outputs:   out_longgop.avi, mosh_core.avi, mosh_final.avi, mosh_final.mp4")
+            elif algo_id == "mosh_h264":
+                print(f"Outputs:   out_longgop_h264.mp4, mosh_core_h264.mp4, mosh_final_h264.mp4")
+
+            if config:
+                print(f"\nOptions:")
+                for key, value in config.items():
+                    print(f"  {key}: {value}")
+
+        # Build and execute command(s)
+        if multipass_enabled:
+            print(f"\n{'─'*70}")
+            print(f"Multi-pass execution: {len(pass_configs)} sequential operations")
+            print(f"{'─'*70}\n")
+
+            # Confirm
+            if not prompt_bool("Execute now?", True):
+                print("\n❌ Cancelled.")
+                return
+
+            # Execute multi-pass
+            execute_multipass_aviglitch(input_files, config, pass_configs, output)
+        else:
+            # Build single command
+            cmd = build_command(algo_id, input_files, output, config)
+
+            print(f"\n{'─'*70}")
+            print("Command to execute:")
+            print(f"{'─'*70}")
+            print(" ".join(cmd))
+            print(f"{'─'*70}\n")
+
+            # Confirm
+            if not prompt_bool("Execute now?", True):
+                print("\n❌ Cancelled. You can run the command above manually later.")
+                return
+
+            # Execute
+            print("\n🚀 Starting processing...\n")
+            result = subprocess.run(cmd)
+
+            if result.returncode == 0:
+                if output:
+                    print(f"\n✅ Success! Output saved to: {output}")
+                else:
+                    print(f"\n✅ Success! Outputs created in working directory.")
+            else:
+                print(f"\n❌ Processing failed with exit code {result.returncode}")
+                sys.exit(result.returncode)
 
     except KeyboardInterrupt:
         print("\n\n❌ Cancelled by user.")
