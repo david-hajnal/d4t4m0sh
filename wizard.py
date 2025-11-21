@@ -633,6 +633,14 @@ def select_files(algo_info: Dict[str, Any], videosrc: str = "videosrc") -> List[
             except ValueError:
                 print("❌ Invalid format. Use comma-separated numbers (e.g. 1,3,2)")
 
+def check_overlap(ranges: List[tuple]) -> bool:
+    """Check if any time ranges overlap."""
+    sorted_ranges = sorted(ranges, key=lambda x: x[0])
+    for i in range(len(sorted_ranges) - 1):
+        if sorted_ranges[i][1] > sorted_ranges[i + 1][0]:
+            return True
+    return False
+
 def configure_pass_params(pass_num: int) -> Dict[str, Any]:
     """Configure parameters for a single mosh pass."""
     print(f"\n{'─'*70}")
@@ -657,17 +665,48 @@ def configure_pass_params(pass_num: int) -> Dict[str, Any]:
                 break
             print("❌ Drop end must be greater than drop start")
 
-    # P-frame duplication
+    # P-frame duplication (multiple ranges)
     print("\n💡 P-frame duplication creates bloom/echo effects")
     has_dup = prompt_bool("Configure P-frame duplication for this pass?", default=False)
 
     if has_dup:
-        dup_at = prompt_float("P-frame duplication start time (seconds)", default=3.0,
-                             help_text="When to start duplicating P-frames")
-        dup_count = prompt_int("Number of P-frame duplicates", default=12,
-                              help_text="More = stronger bloom. Try 8-20")
-        pass_config["dup_at"] = dup_at
-        pass_config["dup_count"] = dup_count
+        while True:
+            num_dup_ranges = prompt_int("How many P-frame duplication sets?", default=1,
+                                       help_text="Number of separate time ranges for P-frame duplication (1-10)")
+            if 1 <= num_dup_ranges <= 10:
+                break
+            print("❌ Please enter 1-10 ranges")
+
+        dup_ranges = []
+        for i in range(1, num_dup_ranges + 1):
+            print(f"\n  P-frame set {i}/{num_dup_ranges}:")
+
+            while True:
+                dup_at = prompt_float(f"  Start time (seconds)", default=3.0 + (i-1)*2.0,
+                                    help_text="When to start duplicating P-frames")
+                dup_count = prompt_int(f"  Number of duplicates", default=12,
+                                      help_text="More = stronger bloom. Try 8-20")
+
+                # Calculate end time for overlap validation
+                # Assuming each duplicate adds a small time window
+                dup_end = dup_at + 0.1  # Small window for the duplication point
+
+                # Check for overlap with existing ranges
+                temp_ranges = [(r["dup_at"], r["dup_at"] + 0.1) for r in dup_ranges]
+                temp_ranges.append((dup_at, dup_end))
+
+                if check_overlap(temp_ranges):
+                    print(f"❌ Overlap detected with existing P-frame range. Please choose different times.")
+                    print(f"   Existing ranges: {[(r['dup_at'], r['dup_at']+0.1) for r in dup_ranges]}")
+                    continue
+
+                dup_ranges.append({
+                    "dup_at": dup_at,
+                    "dup_count": dup_count
+                })
+                break
+
+        pass_config["dup_ranges"] = dup_ranges
 
     # Validate at least one operation
     if not has_drop and not has_dup:
@@ -968,7 +1007,14 @@ def execute_multipass_aviglitch(input_files: List[str], base_config: Dict[str, A
         if "drop_start" in pass_config:
             cmd.extend(["--drop-start", str(pass_config["drop_start"])])
             cmd.extend(["--drop-end", str(pass_config["drop_end"])])
-        if "dup_at" in pass_config:
+
+        # Handle multiple P-frame duplication ranges
+        if "dup_ranges" in pass_config:
+            for dup_range in pass_config["dup_ranges"]:
+                cmd.extend(["--dup-at", str(dup_range["dup_at"])])
+                cmd.extend(["--dup-count", str(dup_range["dup_count"])])
+        # Legacy single dup_at support
+        elif "dup_at" in pass_config:
             cmd.extend(["--dup-at", str(pass_config["dup_at"])])
             cmd.extend(["--dup-count", str(pass_config["dup_count"])])
 
@@ -1083,7 +1129,12 @@ def main():
             for i, pconf in enumerate(pass_configs, 1):
                 print(f"  Pass {i}:")
                 for key, value in pconf.items():
-                    print(f"    {key}: {value}")
+                    if key == "dup_ranges":
+                        print(f"    P-frame duplication ranges: {len(value)} set(s)")
+                        for j, dup_range in enumerate(value, 1):
+                            print(f"      Set {j}: start={dup_range['dup_at']}s, count={dup_range['dup_count']}")
+                    else:
+                        print(f"    {key}: {value}")
         else:
             if output:
                 print(f"Output:    {output}")
