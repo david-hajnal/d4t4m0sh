@@ -3,3 +3,5 @@
 .idea
 .DS_Store
 mosh_algorithms/__pycache__/
+videosrc/
+xvid_out/

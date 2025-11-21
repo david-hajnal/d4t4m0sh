@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from mosh_algorithms import ALGORITHMS
 
-VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".gif")
+VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm")
 
 def default_output_path(in_path: str, algo: str) -> str:
     root, ext = os.path.splitext(in_path)
@@ -111,22 +111,12 @@ def main():
                         help="[video_to_image_mosh] Duration (seconds) of the image motion clip")
     parser.add_argument("--kb", type=str, default="rotate", choices=["rotate","zoom_in"],
                         help="[video_to_image_mosh] Motion style for the image clip")
-        # intensity / surgery
-    parser.add_argument("--postcut", type=int, default=8, help="Drop N packets after each removed I (Avidemux-style)")
-    parser.add_argument("--postcut-rand", dest="postcut_rand", type=str, default=None,
-                        help="Randomize postcut per boundary, format A:B (integers)")
-    parser.add_argument("--drop_mode", type=str, default="all_after_first",
-                        choices=["all_after_first","boundaries_only"],
-                        help="Drop every I after the first, or only boundary I-frames")
-
-    # conversion quality (Xvid)
-    parser.add_argument("--mosh_q", type=int, default=10, help="Xvid/MPEG-4 quantizer (higher=blockier)")
-    parser.add_argument("--hold_sec", type=float, default=0.0, help="Smear hold seconds appended to each clip (except last)")
-
-    # delivery
-    parser.add_argument("--audio_from", type=str, default=None,
-                        help="Path to a source file to pull audio from when delivering MP4")
-
+    parser.add_argument("--postcut", type=int, default=6,
+                        help="[video_to_image_mosh & UI] Drop N frames after each boundary I (stronger smear)")
+    parser.add_argument("--mosh_q", type=int, default=8,
+                    help="[mosh] MPEG-4 quantizer (higher = blockier = stronger smear); e.g., 6–12")
+    parser.add_argument("--pframe_dup_start", type=float, default=None,
+                    help="[avidemux_style] Start P-frame duplication after this timestamp (seconds). None = from beginning")
 
     args = parser.parse_args()
 
@@ -199,15 +189,18 @@ def main():
             img_dur=getattr(args, "img_dur", None),
             kb_mode=getattr(args, "kb", None),
             postcut=getattr(args, "postcut", None),
-            drop_mode=getattr(args, "drop_mode", None),
-            mosh_q=getattr(args, "mosh_q", None),
-            hold_sec=getattr(args, "hold_sec", None),
-            audio_from=getattr(args, "audio_from", None)            
         )
+
+        call_params.update({
+            "postcut": args.postcut,
+            "mosh_q": args.mosh_q,
+            "pframe_dup_start": args.pframe_dup_start,
+        })
 
         # keep only the params this function actually declares
         sig = inspect.signature(func)
-        filtered = {k: v for k, v in call_params.items() if k in sig.parameters and v is not None}
+        # Allow None values to be passed through (don't filter them out)
+        filtered = {k: v for k, v in call_params.items() if k in sig.parameters}
 
         func(**filtered)
     except KeyboardInterrupt:
