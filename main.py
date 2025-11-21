@@ -117,6 +117,8 @@ def main():
                     help="[mosh] MPEG-4 quantizer (higher = blockier = stronger smear); e.g., 6–12")
     parser.add_argument("--pframe_dup_start", type=float, default=None,
                     help="[avidemux_style] Start P-frame duplication after this timestamp (seconds). None = from beginning")
+    parser.add_argument("--chunk_length", type=float, default=2.0,
+                    help="[randomizer] Duration of each chunk in seconds (default: 2.0)")
 
     args = parser.parse_args()
 
@@ -195,6 +197,7 @@ def main():
             "postcut": args.postcut,
             "mosh_q": args.mosh_q,
             "pframe_dup_start": args.pframe_dup_start,
+            "chunk_length": args.chunk_length,
         })
 
         # keep only the params this function actually declares

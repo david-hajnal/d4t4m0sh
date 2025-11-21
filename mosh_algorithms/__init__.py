@@ -8,16 +8,18 @@ from .video_to_image_mosh import process as video_to_image_mosh
 from .image_to_video_mosh import process as image_to_video_mosh
 from .avidemux_style import process as avidemux_style
 from .avidemux_style_all import process as avidemux_style_all
+from .randomizer import process as randomizer
 
 ALGORITHMS = {
     "gop_iframe_drop": gop_iframe_drop,
     "flow_leaky": flow_leaky,
     "blockmatch_basic": blockmatch_basic,
     "inspect_gop": inspect_gop,
-    "gop_multi_drop_concat": gop_multi_drop_concat, 
+    "gop_multi_drop_concat": gop_multi_drop_concat,
     "ui_keyframe_editor": ui_keyframe_editor,
     "video_to_image_mosh": video_to_image_mosh,
     "image_to_video_mosh": image_to_video_mosh,
     "avidemux_style": avidemux_style,
     "avidemux_style_all": avidemux_style_all,
+    "randomizer": randomizer,
 }
