@@ -128,6 +128,15 @@ ALGORITHM_INFO = {
         "inputs": "single",
         "outputs": ".avi",
         "options": ["aviglitch_prep", "prep_q", "prep_gop_ag", "prep_fps", "drop_start", "drop_end", "dup_at", "dup_count", "verbose"]
+    },
+    "randomizer": {
+        "name": "Video Randomizer",
+        "category": "creative",
+        "desc": "Splits video into chunks of specified length and randomly reorders them. Creates glitchy, non-linear temporal effects.",
+        "use_case": "Create chaotic, disjointed video sequences. Great for experimental/glitch aesthetics and abstract visuals.",
+        "inputs": "single",
+        "outputs": ".mp4/.avi",
+        "options": ["chunk_length", "codec", "verbose"]
     }
 }
 
@@ -367,19 +376,19 @@ OPTION_INFO = {
         "help": "Frame rate for prep conversion. Common: 24, 30, 60."
     },
     "drop_start": {
-        "type": "float",
+        "type": "optional_float",
         "default": None,
         "prompt": "I-frame drop window start (seconds)",
         "help": "Start time to remove keyframes (creates smear). Leave empty to skip I-frame removal."
     },
     "drop_end": {
-        "type": "float",
+        "type": "optional_float",
         "default": None,
         "prompt": "I-frame drop window end (seconds)",
         "help": "End time for keyframe removal window. Must be > drop_start."
     },
     "dup_at": {
-        "type": "float",
+        "type": "optional_float",
         "default": None,
         "prompt": "P-frame duplication start time (seconds)",
         "help": "When to start duplicating P-frames (creates bloom/echo). Leave empty to skip duplication."
@@ -389,6 +398,12 @@ OPTION_INFO = {
         "default": 12,
         "prompt": "Number of P-frame duplicates",
         "help": "How many times to duplicate the P-frame. More = stronger bloom. Try 8-20."
+    },
+    "chunk_length": {
+        "type": "float",
+        "default": 2.0,
+        "prompt": "Chunk length (seconds)",
+        "help": "Duration of each video chunk to randomize. Shorter = more chaotic. Try 0.5-3.0 seconds."
     }
 }
 
@@ -742,6 +757,13 @@ def configure_options(algo_id: str, algo_info: Dict[str, Any]) -> Dict[str, Any]
             config[opt_name] = prompt_int(opt["prompt"], opt["default"], opt["help"])
         elif opt["type"] == "float":
             config[opt_name] = prompt_float(opt["prompt"], opt["default"], opt["help"])
+        elif opt["type"] == "optional_float":
+            result = prompt_text(opt["prompt"] + " (or ENTER to skip)", "", opt["help"])
+            if result:
+                try:
+                    config[opt_name] = float(result)
+                except ValueError:
+                    print("❌ Invalid number, skipping this option")
         elif opt["type"] == "bool":
             config[opt_name] = prompt_bool(opt["prompt"], opt["default"])
         elif opt["type"] == "str":
