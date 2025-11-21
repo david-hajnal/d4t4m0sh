@@ -440,6 +440,8 @@ def prompt_choice(prompt: str, choices: List[str], default: Optional[str] = None
                 return choices[idx]
             else:
                 print(f"❌ Invalid choice. Enter 1-{len(choices)}")
+        except KeyboardInterrupt:
+            raise
         except ValueError:
             print("❌ Please enter a number")
 
@@ -447,13 +449,13 @@ def prompt_text(prompt: str, default: Optional[str] = None, help_text: Optional[
     """Prompt for text input."""
     if help_text:
         print(f"\n💡 {help_text}")
-    if default:
+    if default is not None:
         print(f"\n{prompt} (default: {default})")
     else:
         print(f"\n{prompt}")
 
     inp = input("> ").strip()
-    if not inp and default:
+    if not inp and default is not None:
         return default
     return inp
 
@@ -463,6 +465,8 @@ def prompt_int(prompt: str, default: int, help_text: Optional[str] = None) -> in
         result = prompt_text(prompt, str(default), help_text)
         try:
             return int(result)
+        except KeyboardInterrupt:
+            raise
         except ValueError:
             print("❌ Please enter a valid number")
 
@@ -472,6 +476,8 @@ def prompt_float(prompt: str, default: float, help_text: Optional[str] = None) -
         result = prompt_text(prompt, str(default), help_text)
         try:
             return float(result)
+        except KeyboardInterrupt:
+            raise
         except ValueError:
             print("❌ Please enter a valid number")
 
@@ -531,7 +537,9 @@ def select_algorithm() -> str:
                 return selected
             else:
                 print(f"❌ Invalid choice. Enter 1-{len(all_choices)}")
-        except (ValueError, KeyboardInterrupt):
+        except KeyboardInterrupt:
+            raise
+        except ValueError:
             print("❌ Please enter a valid number")
 
 def select_files(algo_info: Dict[str, Any], videosrc: str = "videosrc") -> List[str]:
@@ -560,6 +568,8 @@ def select_files(algo_info: Dict[str, Any], videosrc: str = "videosrc") -> List[
                     print(f"✓ Selected: {os.path.basename(selected)}")
                     return [selected]
                 print(f"❌ Invalid. Enter 1-{len(videos)}")
+            except KeyboardInterrupt:
+                raise
             except ValueError:
                 print("❌ Please enter a valid number")
     elif algo_info["inputs"] == "two":
@@ -573,6 +583,8 @@ def select_files(algo_info: Dict[str, Any], videosrc: str = "videosrc") -> List[
                 if 0 <= idx_a < len(videos):
                     break
                 print(f"❌ Invalid. Enter 1-{len(videos)}")
+            except KeyboardInterrupt:
+                raise
             except ValueError:
                 print("❌ Please enter a valid number")
 
@@ -588,6 +600,8 @@ def select_files(algo_info: Dict[str, Any], videosrc: str = "videosrc") -> List[
                             continue
                     break
                 print(f"❌ Invalid. Enter 1-{len(videos)}")
+            except KeyboardInterrupt:
+                raise
             except ValueError:
                 print("❌ Please enter a valid number")
 
@@ -614,6 +628,8 @@ def select_files(algo_info: Dict[str, Any], videosrc: str = "videosrc") -> List[
                         print(f"  • {os.path.basename(f)}")
                     return selected
                 print(f"❌ Invalid indices. Use 1-{len(videos)}")
+            except KeyboardInterrupt:
+                raise
             except ValueError:
                 print("❌ Invalid format. Use comma-separated numbers (e.g. 1,3,2)")
 
@@ -963,7 +979,11 @@ def execute_multipass_aviglitch(input_files: List[str], base_config: Dict[str, A
         print(f"Command: {' '.join(cmd)}\n")
 
         # Execute pass
-        result = subprocess.run(cmd)
+        try:
+            result = subprocess.run(cmd)
+        except KeyboardInterrupt:
+            print(f"\n❌ Pass {i} interrupted by user")
+            raise
 
         if result.returncode != 0:
             print(f"\n❌ Pass {i} failed with exit code {result.returncode}")
@@ -1107,7 +1127,11 @@ def main():
 
             # Execute
             print("\n🚀 Starting processing...\n")
-            result = subprocess.run(cmd)
+            try:
+                result = subprocess.run(cmd)
+            except KeyboardInterrupt:
+                print("\n❌ Processing interrupted by user")
+                raise
 
             if result.returncode == 0:
                 if output:
