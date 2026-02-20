@@ -96,11 +96,26 @@ ALGORITHM_INFO = {
     "aviglitch_mosh": {
         "name": "AviGlitch-Style Packet Mosh",
         "category": "advanced",
-        "desc": "Direct AVI packet manipulation using PyAV. I-frame removal (smear) + P-frame duplication (bloom). No re-encoding.",
-        "use_case": "Classic AviGlitch workflow without Ruby. Best with MPEG-4 ASP AVI. Use --prep to auto-convert any format.",
+        "desc": "Direct AVI packet manipulation using PyAV. Classic drop/dup mode plus manual bloom pivot control. No re-encoding.",
+        "use_case": "Classic AviGlitch workflow without Ruby, or bloom burst insertion when you already know pivot frame index.",
         "inputs": "single",
         "outputs": ".avi",
-        "options": ["aviglitch_prep", "prep_q", "prep_gop_ag", "prep_fps", "drop_start", "drop_end", "dup_at", "dup_count", "verbose"]
+        "options": [
+            "ag_effect",
+            "aviglitch_prep",
+            "prep_q",
+            "prep_gop_ag",
+            "prep_fps",
+            "drop_start",
+            "drop_end",
+            "dup_at",
+            "dup_count",
+            "pivot_frame",
+            "repeat_count",
+            "kill_ratio",
+            "ag_keep_audio",
+            "verbose",
+        ]
     },
     "randomizer": {
         "name": "Video Randomizer",
@@ -386,6 +401,13 @@ OPTION_INFO = {
         "prompt": "Auto-convert to MPEG-4 ASP AVI first?",
         "help": "Convert input to glitch-friendly format (MPEG-4 ASP, long GOP, no B-frames) before moshing."
     },
+    "ag_effect": {
+        "type": "choice",
+        "default": "classic",
+        "choices": ["classic", "bloom"],
+        "prompt": "AviGlitch effect mode",
+        "help": "classic: I-frame drop / P-frame duplication. bloom: pivot-frame burst insertion."
+    },
     "prep_q": {
         "type": "int",
         "default": 3,
@@ -427,6 +449,30 @@ OPTION_INFO = {
         "default": 12,
         "prompt": "Number of P-frame duplicates",
         "help": "How many times to duplicate the P-frame. More = stronger bloom. Try 8-20."
+    },
+    "pivot_frame": {
+        "type": "int",
+        "default": 0,
+        "prompt": "Bloom pivot frame chunk index",
+        "help": "Frame-chunk index to duplicate in bloom mode. Values outside range are safely clamped."
+    },
+    "repeat_count": {
+        "type": "int",
+        "default": 12,
+        "prompt": "Bloom repeat count",
+        "help": "How many duplicates of the pivot chunk to insert."
+    },
+    "kill_ratio": {
+        "type": "float",
+        "default": 1.0,
+        "prompt": "Bloom kill ratio",
+        "help": "Keeps chunks where size <= max_frame_size * ratio before bloom insertion."
+    },
+    "ag_keep_audio": {
+        "type": "bool",
+        "default": False,
+        "prompt": "Keep audio in bloom output",
+        "help": "If enabled, passes --keep-audio to bloom mode."
     },
     "chunk_length": {
         "type": "float",
@@ -795,6 +841,11 @@ def configure_options(algo_id: str, algo_info: Dict[str, Any]) -> Dict[str, Any]
         if opt_name not in OPTION_INFO:
             continue
         if algo_id == "aviglitch_mosh":
+            effect_mode = config.get("ag_effect", OPTION_INFO["ag_effect"]["default"])
+            if effect_mode == "classic" and opt_name in ("pivot_frame", "repeat_count", "kill_ratio", "ag_keep_audio"):
+                continue
+            if effect_mode == "bloom" and opt_name in ("drop_start", "drop_end", "dup_at", "dup_count"):
+                continue
             # These options only make sense when their paired value exists.
             if opt_name == "drop_end" and "drop_start" not in config:
                 continue
@@ -830,6 +881,14 @@ def configure_options(algo_id: str, algo_info: Dict[str, Any]) -> Dict[str, Any]
                 config[opt_name] = result
 
     if algo_id == "aviglitch_mosh":
+        effect_mode = config.get("ag_effect", OPTION_INFO["ag_effect"]["default"])
+        if effect_mode == "bloom":
+            config.pop("drop_start", None)
+            config.pop("drop_end", None)
+            config.pop("dup_at", None)
+            config.pop("dup_count", None)
+            return config
+
         # Keep paired options consistent.
         has_drop_start = "drop_start" in config
         has_drop_end = "drop_end" in config
@@ -939,6 +998,9 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
         cmd.extend(["--in", input_files[0]])
         cmd.extend(["--out", output])
 
+        effect_mode = str(config.get("ag_effect", OPTION_INFO["ag_effect"]["default"]))
+        cmd.extend(["--effect", effect_mode])
+
         # Add aviglitch-specific options
         for key, value in config.items():
             if value is not None and value != "" and value is not False:
@@ -950,7 +1012,17 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
                     cmd.extend(["--prep-gop", str(value)])
                 elif key == "prep_fps":
                     cmd.extend(["--prep-fps", str(value)])
-                elif key in ("drop_start", "drop_end", "dup_at", "dup_count"):
+                elif key in (
+                    "ag_effect",
+                    "drop_start",
+                    "drop_end",
+                    "dup_at",
+                    "dup_count",
+                    "pivot_frame",
+                    "repeat_count",
+                    "kill_ratio",
+                    "ag_keep_audio",
+                ):
                     # Added as validated pairs below.
                     continue
                 elif key == "verbose" and value:
@@ -958,16 +1030,23 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
                 else:
                     cmd.extend([f"--{key}", str(value)])
 
-        drop_start = config.get("drop_start")
-        drop_end = config.get("drop_end")
-        if drop_start is not None and drop_end is not None:
-            cmd.extend(["--drop-start", str(drop_start)])
-            cmd.extend(["--drop-end", str(drop_end)])
+        if effect_mode == "bloom":
+            cmd.extend(["--pivot-frame", str(config.get("pivot_frame", OPTION_INFO["pivot_frame"]["default"]))])
+            cmd.extend(["--repeat-count", str(config.get("repeat_count", OPTION_INFO["repeat_count"]["default"]))])
+            cmd.extend(["--kill-ratio", str(config.get("kill_ratio", OPTION_INFO["kill_ratio"]["default"]))])
+            if config.get("ag_keep_audio"):
+                cmd.append("--keep-audio")
+        else:
+            drop_start = config.get("drop_start")
+            drop_end = config.get("drop_end")
+            if drop_start is not None and drop_end is not None:
+                cmd.extend(["--drop-start", str(drop_start)])
+                cmd.extend(["--drop-end", str(drop_end)])
 
-        dup_at = config.get("dup_at")
-        if dup_at is not None:
-            cmd.extend(["--dup-at", str(dup_at)])
-            cmd.extend(["--dup-count", str(config.get("dup_count", OPTION_INFO["dup_count"]["default"]))])
+            dup_at = config.get("dup_at")
+            if dup_at is not None:
+                cmd.extend(["--dup-at", str(dup_at)])
+                cmd.extend(["--dup-count", str(config.get("dup_count", OPTION_INFO["dup_count"]["default"]))])
 
         return cmd
 
@@ -1031,6 +1110,7 @@ def execute_multipass_aviglitch(input_files: List[str], base_config: Dict[str, A
         cmd = ["python3", "aviglitch_mosh.py"]
         cmd.extend(["--in", current_input])
         cmd.extend(["--out", pass_output])
+        cmd.extend(["--effect", str(base_config.get("ag_effect", OPTION_INFO["ag_effect"]["default"]))])
 
         # Only apply prep on first pass
         if i == 1 and base_config.get("aviglitch_prep"):
@@ -1120,25 +1200,30 @@ def main():
         pass_configs = []
 
         if algo_id == "aviglitch_mosh":
-            print_section("Multi-Pass Configuration")
-            print("💡 Multi-pass mode applies multiple rounds of moshing to the same clip.")
-            print("   Each pass can have different I-frame drop and P-frame duplication settings.")
-            print("   Conversion/prep settings are applied once on the first pass.\n")
+            effect_mode = str(config.get("ag_effect", OPTION_INFO["ag_effect"]["default"]))
+            if effect_mode == "classic":
+                print_section("Multi-Pass Configuration")
+                print("💡 Multi-pass mode applies multiple rounds of moshing to the same clip.")
+                print("   Each pass can have different I-frame drop and P-frame duplication settings.")
+                print("   Conversion/prep settings are applied once on the first pass.\n")
 
-            multipass_enabled = prompt_bool("Enable multi-pass mode?", default=False)
+                multipass_enabled = prompt_bool("Enable multi-pass mode?", default=False)
 
-            if multipass_enabled:
-                while True:
-                    num_passes = prompt_int("Number of passes", default=2,
-                                           help_text="How many times to mosh this clip (2-5 recommended)")
-                    if 2 <= num_passes <= 10:
-                        break
-                    print("❌ Please enter 2-10 passes")
+                if multipass_enabled:
+                    while True:
+                        num_passes = prompt_int("Number of passes", default=2,
+                                               help_text="How many times to mosh this clip (2-5 recommended)")
+                        if 2 <= num_passes <= 10:
+                            break
+                        print("❌ Please enter 2-10 passes")
 
-                # Collect configuration for each pass
-                for i in range(1, num_passes + 1):
-                    pass_config = configure_pass_params(i)
-                    pass_configs.append(pass_config)
+                    # Collect configuration for each pass
+                    for i in range(1, num_passes + 1):
+                        pass_config = configure_pass_params(i)
+                        pass_configs.append(pass_config)
+            else:
+                print_section("Multi-Pass Configuration")
+                print("ℹ️  Multi-pass is only available for AviGlitch classic mode.")
 
         # Step 4: Select output
         output = select_output(algo_info, input_files)

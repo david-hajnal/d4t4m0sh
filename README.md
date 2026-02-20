@@ -121,6 +121,48 @@ python main.py -a <algorithm> [-f "file1,file2,..."] -o out.ext [options]
 
 * --audio_from PATH – add audio (for avidemux_style_all when delivering MP4).
 
+## Bloom Datamosh (packet-level)
+
+`aviglitch_mosh.py` now supports a bloom burst mode that duplicates one compressed video packet chunk multiple times, so artifacts smear forward without full-frame re-encoding.
+
+Core API:
+
+* `bloom_mosh(input_path, output_path, pivot_frame, repeat_count, kill_ratio=1.0, keep_audio=False)`
+
+Standalone helper:
+
+* Launch `/Users/kaszperek/repos/d4t4m0sh/tools/keyframe_helper_gui.py` to pick an approximate start/keyframe visually and export JSON + suggested CLI commands.
+
+Parameters:
+
+* `--effect bloom` – enable bloom burst ordering.
+* `--pivot-frame N` – packet/frame-chunk index to duplicate (auto-clamped to valid range).
+* `--repeat-count R` – number of duplicate chunks inserted.
+* `--kill-ratio K` – size filter (`frame_size <= max_frame_size * K`) before bloom ordering; initial required chunk(s) are always preserved.
+* `--keep-audio` – copy audio stream (disabled by default for stronger glitch safety).
+
+Expected visual result:
+
+* A hard “burst” at the pivot moment where motion freezes/echoes repeatedly, then resumes with continuing datamosh artifacts.
+
+Reproducible example:
+
+```bash
+python aviglitch_mosh.py \
+  --in test.avi \
+  --out bloom_test.avi \
+  --effect bloom \
+  --pivot-frame 80 \
+  --repeat-count 24 \
+  --kill-ratio 0.85
+```
+
+Standalone keyframe helper example:
+
+```bash
+python3 tools/keyframe_helper_gui.py --in videosrc/0003.mp4
+```
+
 ## Avidemux
 
 Strongest, old-school mosh

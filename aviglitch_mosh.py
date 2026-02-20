@@ -15,17 +15,33 @@ import os
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
+from typing import List, Sequence
 
 try:
     import av
 except ImportError:
-    print("[ERROR] PyAV is not installed. Install with: pip install av", file=sys.stderr)
-    sys.exit(1)
+    av = None
+
+
+def _require_av():
+    if av is None:
+        raise RuntimeError("PyAV is not installed. Install with: pip install av")
+
+
+@dataclass(frozen=True)
+class FrameChunk:
+    payload: bytes
+    frame_size: int
+    pts: int | None
+    dts: int | None
 
 
 def check_codec(input_path, verbose=False):
     """Check if input uses MPEG-4 ASP / Xvid codec."""
+    _require_av()
     try:
         container = av.open(str(input_path))
         video_stream = next((s for s in container.streams if s.type == "video"), None)
@@ -106,8 +122,325 @@ def prep_video(input_path, output_path, q=3, gop=300, fps=24, verbose=False):
     return output_path
 
 
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _clamp_pivot_frame(pivot_frame, frame_count):
+    if frame_count <= 0:
+        return 0
+    pivot = _safe_int(pivot_frame, 0)
+    if pivot < 0:
+        return 0
+    if pivot >= frame_count:
+        return frame_count - 1
+    return pivot
+
+
+def _sanitize_repeat_count(repeat_count):
+    return max(0, _safe_int(repeat_count, 0))
+
+
+def _filter_frame_chunks(frame_chunks: Sequence[FrameChunk], kill_ratio: float, required_initial_frames: int = 1):
+    if not frame_chunks:
+        return [], 0
+
+    keep_head = max(1, _safe_int(required_initial_frames, 1))
+    ratio = max(0.0, _safe_float(kill_ratio, 1.0))
+    max_frame_size = max(chunk.frame_size for chunk in frame_chunks)
+    threshold = max_frame_size * ratio
+
+    filtered = []
+    for idx, chunk in enumerate(frame_chunks):
+        if idx < keep_head or chunk.frame_size <= threshold:
+            filtered.append(chunk)
+
+    if not filtered:
+        filtered = list(frame_chunks[:keep_head])
+
+    return filtered, max_frame_size
+
+
+def build_bloom_sequence(frames: Sequence, pivot_frame, repeat_count):
+    """
+    Build bloom ordering exactly as:
+      prefix = frames[:pivot]
+      burst = [frames[pivot]] * repeat_count
+      suffix = frames[pivot:]
+      result = prefix + burst + suffix
+    """
+    if not frames:
+        return [], 0, _sanitize_repeat_count(repeat_count)
+
+    safe_pivot = _clamp_pivot_frame(pivot_frame, len(frames))
+    safe_repeat = _sanitize_repeat_count(repeat_count)
+    prefix = list(frames[:safe_pivot])
+    burst = [frames[safe_pivot]] * safe_repeat
+    suffix = list(frames[safe_pivot:])
+    return prefix + burst + suffix, safe_pivot, safe_repeat
+
+
+def _collect_video_frame_chunks(container, video_stream) -> List[FrameChunk]:
+    chunks: List[FrameChunk] = []
+    for packet in container.demux(video_stream):
+        if packet.dts is None and packet.pts is None:
+            continue
+        payload = bytes(packet)
+        if not payload:
+            continue
+        chunks.append(
+            FrameChunk(
+                payload=payload,
+                frame_size=len(payload),
+                pts=packet.pts,
+                dts=packet.dts,
+            )
+        )
+    return chunks
+
+
+def _estimate_packet_ticks(frame_chunks: Sequence[FrameChunk], time_base, fallback_fps):
+    deltas = []
+    dts_values = [c.dts for c in frame_chunks if c.dts is not None]
+    if len(dts_values) > 1:
+        for left, right in zip(dts_values, dts_values[1:]):
+            delta = right - left
+            if delta > 0:
+                deltas.append(delta)
+
+    if not deltas:
+        pts_values = [c.pts for c in frame_chunks if c.pts is not None]
+        for left, right in zip(pts_values, pts_values[1:]):
+            delta = right - left
+            if delta > 0:
+                deltas.append(delta)
+
+    if deltas:
+        return max(1, min(deltas))
+
+    fps = fallback_fps or 24
+    try:
+        return max(1, int(round((Fraction(1, 1) / fps) / time_base)))
+    except Exception:
+        return 1
+
+
+def _packet_from_payload(payload: bytes):
+    pkt = av.Packet(len(payload))
+    if payload:
+        memoryview(pkt)[:] = payload
+    return pkt
+
+
+def _add_stream_from_template(out_container, src_stream):
+    src_codec = getattr(src_stream, "codec_context", None)
+    src_codec_name = (
+        getattr(src_codec, "name", None)
+        or getattr(getattr(src_stream, "codec", None), "name", None)
+        or "mpeg4"
+    )
+    try:
+        out_stream = out_container.add_stream(template=src_stream)
+    except Exception:
+        add_kwargs = {}
+        src_rate = getattr(src_stream, "average_rate", None)
+        if src_rate:
+            add_kwargs["rate"] = src_rate
+        try:
+            out_stream = out_container.add_stream(src_codec_name, **add_kwargs)
+        except TypeError:
+            out_stream = out_container.add_stream(src_codec_name)
+
+        if src_stream.type == "video" and src_codec is not None:
+            width = getattr(src_codec, "width", None)
+            height = getattr(src_codec, "height", None)
+            pix_fmt = getattr(src_codec, "pix_fmt", None)
+            if width:
+                try:
+                    out_stream.width = width
+                except Exception:
+                    pass
+            if height:
+                try:
+                    out_stream.height = height
+                except Exception:
+                    pass
+            if pix_fmt:
+                try:
+                    out_stream.pix_fmt = pix_fmt
+                except Exception:
+                    pass
+
+        try:
+            out_stream.time_base = src_stream.time_base
+        except Exception:
+            pass
+        try:
+            if src_codec is not None and src_codec.extradata:
+                out_stream.codec_context.extradata = src_codec.extradata
+        except Exception:
+            pass
+
+    try:
+        out_stream.codec_tag = src_stream.codec_tag
+    except Exception:
+        pass
+    return out_stream
+
+
+def _mux_video_chunks(out_container, out_stream, chunks: Sequence[FrameChunk], time_base, ticks):
+    if not chunks:
+        return
+
+    time_base_to_use = out_stream.time_base or time_base
+    frame_ticks = max(1, _safe_int(ticks, 1))
+    base_pts = 0
+    base_dts = 0
+
+    for idx, chunk in enumerate(chunks):
+        pkt = _packet_from_payload(chunk.payload)
+        pkt.pts = base_pts + (idx * frame_ticks)
+        pkt.dts = base_dts + (idx * frame_ticks)
+        pkt.duration = frame_ticks
+        pkt.time_base = time_base_to_use
+        pkt.stream = out_stream
+        out_container.mux(pkt)
+
+
+def _mux_audio_packets(in_container, in_audio_stream, out_container, out_audio_stream):
+    try:
+        in_container.seek(0)
+    except Exception:
+        pass
+    for packet in in_container.demux(in_audio_stream):
+        if packet.dts is None and packet.pts is None:
+            continue
+        try:
+            packet.rescale_ts(in_audio_stream.time_base, out_audio_stream.time_base)
+        except Exception:
+            pass
+        packet.stream = out_audio_stream
+        out_container.mux(packet)
+
+
+def _run_process(cmd):
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr}")
+    return proc
+
+
+def _finalize_bloom_output(video_path, output_path, audio_source=None):
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(video_path),
+    ]
+
+    if audio_source:
+        cmd.extend(["-i", str(audio_source), "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy"])
+        ext = os.path.splitext(str(output_path))[1].lower()
+        if ext in {".mp4", ".mov", ".m4v"}:
+            cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+        else:
+            cmd.extend(["-c:a", "copy"])
+    else:
+        cmd.extend(["-map", "0:v:0", "-c:v", "copy", "-an"])
+
+    cmd.append(str(output_path))
+    _run_process(cmd)
+
+
+def bloom_mosh(input_path, output_path, pivot_frame, repeat_count, kill_ratio=1.0, keep_audio=False):
+    """
+    Bloom datamosh by duplicating one packet chunk many times.
+    Operates in compressed domain: demux packet chunks, reorder, remux.
+    """
+    _require_av()
+
+    input_path = str(input_path)
+    output_path = str(output_path)
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    output_ext = os.path.splitext(output_path)[1].lower()
+    needs_finalize_mux = output_ext != ".avi" or bool(keep_audio)
+    staging_output = output_path
+    staging_temp = None
+    if needs_finalize_mux:
+        staging_temp = tempfile.NamedTemporaryFile(suffix=".avi", delete=False)
+        staging_temp.close()
+        staging_output = staging_temp.name
+
+    in_container = av.open(input_path)
+    out_container = None
+    write_complete = False
+    try:
+        video_stream = next((s for s in in_container.streams if s.type == "video"), None)
+        if video_stream is None:
+            raise RuntimeError("No video stream found")
+
+        frame_chunks = _collect_video_frame_chunks(in_container, video_stream)
+        if not frame_chunks:
+            raise RuntimeError("No video packets found")
+
+        filtered_frames, max_frame_size = _filter_frame_chunks(frame_chunks, kill_ratio, required_initial_frames=1)
+        ordered_frames, safe_pivot, safe_repeat = build_bloom_sequence(
+            filtered_frames, pivot_frame, repeat_count
+        )
+
+        frame_ticks = _estimate_packet_ticks(filtered_frames, video_stream.time_base, video_stream.average_rate)
+
+        out_container = av.open(staging_output, mode="w")
+        out_video_stream = _add_stream_from_template(out_container, video_stream)
+        _mux_video_chunks(out_container, out_video_stream, ordered_frames, video_stream.time_base, frame_ticks)
+        write_complete = True
+    finally:
+        if out_container is not None:
+            out_container.close()
+        in_container.close()
+        if staging_temp is not None and os.path.exists(staging_output):
+            try:
+                if write_complete:
+                    _finalize_bloom_output(
+                        staging_output,
+                        output_path,
+                        audio_source=input_path if keep_audio else None,
+                    )
+            finally:
+                os.unlink(staging_output)
+
+    return {
+        "input_frames": len(frame_chunks),
+        "filtered_frames": len(filtered_frames),
+        "output_frames": len(ordered_frames),
+        "inserted_frames": len(ordered_frames) - len(filtered_frames),
+        "pivot_frame": safe_pivot,
+        "repeat_count": safe_repeat,
+        "max_frame_size": max_frame_size,
+        "keep_audio": bool(keep_audio),
+    }
+
+
 def get_video_duration(container, video_stream):
     """Get video duration in seconds."""
+    _require_av()
     if video_stream.duration:
         return float(video_stream.duration * video_stream.time_base)
     elif container.duration:
@@ -130,6 +463,8 @@ def remove_iframes_and_duplicate_pframes(
     1. Remove I-frames in [drop_start, drop_end] window
     2. Duplicate P-frames starting at dup_at timestamp
     """
+
+    _require_av()
 
     print(f"\n=== AviGlitch-Style Packet Mosh ===")
     print(f"Input: {input_path}")
@@ -183,7 +518,6 @@ def remove_iframes_and_duplicate_pframes(
     time_base = video_stream.time_base
     fps = video_stream.average_rate or 24
     # Calculate frame ticks: how many time_base ticks per frame
-    from fractions import Fraction
     frame_ticks = max(1, int(round((Fraction(1, 1) / fps) / time_base)))
 
     if verbose:
@@ -314,6 +648,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Bloom burst effect (packet-level frame chunk duplication)
+  python aviglitch_mosh.py --in input.avi --out bloom.avi \\
+    --effect bloom --pivot-frame 120 --repeat-count 24 --kill-ratio 0.8
+
   # I-frame removal (smear effect)
   python aviglitch_mosh.py --in input.avi --out moshed.avi \\
     --drop-start 5.0 --drop-end 7.0
@@ -344,6 +682,13 @@ Note: Works best with MPEG-4 ASP (Xvid) AVI input with long GOP and no B-frames.
                         help='Input AVI file (or any format with --prep)')
     parser.add_argument('--out', dest='output', required=True,
                         help='Output AVI file')
+    parser.add_argument(
+        '--effect',
+        type=str,
+        default='classic',
+        choices=['classic', 'bloom'],
+        help='classic: drop/dup behavior, bloom: pivot-frame burst insertion'
+    )
 
     # I-frame removal options
     parser.add_argument('--drop-start', type=float, default=None,
@@ -358,6 +703,16 @@ Note: Works best with MPEG-4 ASP (Xvid) AVI input with long GOP and no B-frames.
                         help='Timestamp (seconds) to start P-frame duplication')
     parser.add_argument('--dup-count', type=int, default=12,
                         help='Number of P-frame duplications (default: 12)')
+
+    # Bloom effect options
+    parser.add_argument('--pivot-frame', type=int, default=0,
+                        help='[effect=bloom] Pivot frame chunk index to duplicate')
+    parser.add_argument('--repeat-count', type=int, default=12,
+                        help='[effect=bloom] Number of duplicate chunks to insert')
+    parser.add_argument('--kill-ratio', type=float, default=1.0,
+                        help='[effect=bloom] Keep chunks where size <= max_size * kill_ratio')
+    parser.add_argument('--keep-audio', action='store_true',
+                        help='[effect=bloom] Copy audio stream to output')
 
     # Prep options
     parser.add_argument('--prep', action='store_true',
@@ -384,15 +739,16 @@ Note: Works best with MPEG-4 ASP (Xvid) AVI input with long GOP and no B-frames.
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Validate at least one operation specified
-    has_drop = args.drop_start is not None and args.drop_end is not None
-    has_dup = args.dup_at is not None
+    if args.effect == "classic":
+        # Validate at least one classic operation specified
+        has_drop = args.drop_start is not None and args.drop_end is not None
+        has_dup = args.dup_at is not None
 
-    if not has_drop and not has_dup:
-        print("[ERROR] Must specify at least one operation:", file=sys.stderr)
-        print("  - I-frame removal: --drop-start and --drop-end", file=sys.stderr)
-        print("  - P-frame duplication: --dup-at", file=sys.stderr)
-        sys.exit(1)
+        if not has_drop and not has_dup:
+            print("[ERROR] Must specify at least one operation:", file=sys.stderr)
+            print("  - I-frame removal: --drop-start and --drop-end", file=sys.stderr)
+            print("  - P-frame duplication: --dup-at", file=sys.stderr)
+            sys.exit(1)
 
     # Handle prep conversion
     work_input = input_path
@@ -419,16 +775,37 @@ Note: Works best with MPEG-4 ASP (Xvid) AVI input with long GOP and no B-frames.
 
     # Perform datamosh operations
     try:
-        remove_iframes_and_duplicate_pframes(
-            work_input,
-            output_path,
-            drop_start=args.drop_start,
-            drop_end=args.drop_end,
-            dup_at=args.dup_at,
-            dup_count=args.dup_count,
-            keep_first_iframe=args.keep_first_iframe,
-            verbose=args.verbose
-        )
+        if args.effect == "bloom":
+            stats = bloom_mosh(
+                work_input,
+                output_path,
+                pivot_frame=args.pivot_frame,
+                repeat_count=args.repeat_count,
+                kill_ratio=args.kill_ratio,
+                keep_audio=args.keep_audio,
+            )
+            if args.verbose:
+                print("\n=== Bloom Summary ===")
+                print(f"Input packets: {stats['input_frames']}")
+                print(f"Filtered packets: {stats['filtered_frames']}")
+                print(f"Output packets: {stats['output_frames']}")
+                print(f"Inserted packets: {stats['inserted_frames']}")
+                print(f"Pivot frame: {stats['pivot_frame']}")
+                print(f"Repeat count: {stats['repeat_count']}")
+                print(f"Max frame size: {stats['max_frame_size']}")
+                print(f"Keep audio: {stats['keep_audio']}")
+            print(f"✓ Output: {output_path}")
+        else:
+            remove_iframes_and_duplicate_pframes(
+                work_input,
+                output_path,
+                drop_start=args.drop_start,
+                drop_end=args.drop_end,
+                dup_at=args.dup_at,
+                dup_count=args.dup_count,
+                keep_first_iframe=args.keep_first_iframe,
+                verbose=args.verbose
+            )
     finally:
         # Cleanup temp prep file
         if temp_prep and temp_prep_path.exists():
