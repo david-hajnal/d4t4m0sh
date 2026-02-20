@@ -1,91 +1,123 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is a practical guide for coding agents working in this repository.
 
-## Project Overview
+## Project Summary
 
-d4t4m0sh is a video datamoshing tool that creates glitch art effects by manipulating video codec compression. It works by removing I-frames (keyframes) and manipulating P-frames to create abstract visual artifacts like motion trails, frozen frames, and cross-clip bleeding.
+d4t4m0sh is a Python + FFmpeg datamosh toolkit. It combines:
+- A registry-driven CLI (`main.py`) for modular algorithms in `mosh_algorithms/`
+- An interactive wizard (`wizard.py`) for guided runs
+- Standalone scripts for specialized workflows (`aviglitch_mosh.py`, `mosh.py`, `mosh_h264.py`, `mosh_zoom_oneclip.py`)
+
+Core idea: manipulate GOP/keyframe behavior or packets to create datamosh artifacts.
 
 ## Setup
+
+Preferred on macOS:
 
 ```bash
 ./setup_mosh_mac.sh
 source mosh-venv/bin/activate
 ```
 
-This installs FFmpeg (via Homebrew), creates a Python venv, and installs dependencies: numpy, opencv-python-headless, av (PyAV), tqdm.
+Notes:
+- There is no `requirements.txt` in this repo.
+- The setup script installs `numpy`, `opencv-python-headless`, `av`, and `tqdm`.
+- `ffmpeg` and `ffprobe` must be on `PATH`.
 
-## Running the Tool
+## Main Entry Points
+
+- `main.py`: primary CLI dispatcher for algorithms in `mosh_algorithms/__init__.py`
+- `wizard.py`: interactive flow for selecting algorithm, files, options, output, then execute
+- `aviglitch_mosh.py`: direct AVI packet manipulation workflow with optional prep conversion
+- `mosh.py`: packet-surgery transition between clip A and clip B
+- `mosh_h264.py`: H.264 long-GOP transition workflow
+- `mosh_zoom_oneclip.py`: single-clip melting zoom workflow
+
+## Current Algorithm Registry (`main.py`)
+
+`main.py -a` choices come from `mosh_algorithms/__init__.py`:
+
+- `gop_iframe_drop`
+- `flow_leaky`
+- `blockmatch_basic`
+- `inspect_gop`
+- `gop_multi_drop_concat`
+- `ui_keyframe_editor`
+- `video_to_image_mosh`
+- `image_to_video_mosh`
+- `avidemux_style`
+- `avidemux_style_all`
+- `randomizer`
+- `double_exposure`
+
+## Current Wizard Menu (`wizard.py`)
+
+The wizard exposes a curated set (not identical to `main.py`):
+
+- `inspect_gop`
+- `gop_multi_drop_concat`
+- `video_to_image_mosh`
+- `image_to_video_mosh`
+- `double_exposure`
+- `avidemux_style`
+- `avidemux_style_all`
+- `mosh_zoom_oneclip`
+- `aviglitch_mosh`
+
+## Usage Patterns
+
+Wizard first:
 
 ```bash
-python main.py -f INPUT -a ALGORITHM [-o OUTPUT] [OPTIONS]
+python3 wizard.py
 ```
 
-### Common Commands
+CLI registry path:
 
-**Basic datamosh (I-frame drop):**
 ```bash
-python main.py -f input.mp4 -a gop_iframe_drop -o out.mp4 -v
+python3 main.py -a inspect_gop -f videosrc/clip.mp4 -o clip.gop.csv -v
+python3 main.py -a gop_multi_drop_concat -f "videosrc/a.mp4,videosrc/b.mp4" -o out.mp4 -v
+python3 main.py -a avidemux_style -f "xvid_out/a.xvid.avi,xvid_out/b.xvid.avi" -o out.avi -v
 ```
 
-**Multi-clip datamosh (most common for artistic use):**
+Standalone scripts:
+
 ```bash
-python main.py -f video1.mp4,video2.mp4 -a bergman_style -o out.mp4 --postcut 6 -v
+python3 aviglitch_mosh.py --in videosrc/clip.mp4 --out clip.moshed.avi --prep --drop-start 2.0 --drop-end 4.0 -v
+python3 mosh_zoom_oneclip.py --in videosrc/clip.mp4 --out clip.zoom.mp4 -v
 ```
 
-**Strongest artifacts (requires Xvid/AVI inputs):**
+## Architecture Notes
+
+- `main.py` builds a common argument set, then filters args by each algorithm's `process(...)` signature with `inspect.signature`.
+- Multi-input handling in `main.py` accepts comma-separated `-f` or interactive scan/pick from `videosrc/`.
+- Most heavy video work is done through FFmpeg subprocess pipelines and PyAV packet/frame handling.
+- `wizard.py` has its own metadata catalogs (`ALGORITHM_INFO`, `OPTION_INFO`) and command builders.
+
+## Guardrails and Gotchas
+
+- Keep docs and registries aligned when adding/removing algorithms:
+  - `mosh_algorithms/__init__.py`
+  - `main.py` help text and examples
+  - `wizard.py` (`ALGORITHM_INFO` and option mapping)
+  - `README.md` and this file
+- `avidemux_style` expects pre-converted, compatible Xvid AVI inputs for strongest/cleanest packet surgery behavior.
+- `aviglitch_mosh.py` requires at least one operation:
+  - I-frame window (`--drop-start` + `--drop-end`), or
+  - P-frame duplication (`--dup-at`)
+- Large media artifacts live in the repo root; avoid accidental edits/removals unless explicitly requested.
+
+## Minimal Validation After Changes
+
+For Python file edits:
+
 ```bash
-./convert_to_xvid.sh -i videosrc -o xvid_out
-python main.py -f xvid_out/clip1.xvid.avi,xvid_out/clip2.xvid.avi -a avidemux_style -o out.avi -v
+python3 -m py_compile main.py wizard.py aviglitch_mosh.py
 ```
 
-**Analyze GOP structure:**
+For logic changes in one module, compile that module at minimum:
+
 ```bash
-python main.py -f video.mp4 -a inspect_gop -o analysis.csv -v
+python3 -m py_compile path/to/changed_file.py
 ```
-
-## Architecture
-
-### Algorithm Registry Pattern
-
-Algorithms are registered in `mosh_algorithms/__init__.py` as a dict mapping names to `process()` functions. `main.py` routes CLI calls to algorithms and uses introspection to pass only relevant parameters.
-
-### Two Processing Approaches
-
-**Decoded-Domain** (OpenCV/NumPy): Algorithms like `flow_leaky`, `gop_iframe_drop`, `blockmatch_basic` decode frames, manipulate pixel arrays, then re-encode.
-
-**Packet-Domain** (FFmpeg/PyAV): Algorithms like `bergman_style`, `avidemux_style` use multi-stage FFmpeg pipelines with packet-level manipulation. Pattern:
-1. Normalize clips (uniform WxH, FPS, codec)
-2. Concatenate with keyframes only at clip boundaries
-3. Detect and remove I-frames (packet-level or frame dropping)
-4. Final encode with long GOP
-
-All intermediate files use `tempfile.TemporaryDirectory()` for automatic cleanup.
-
-## Key Algorithms
-
-- **`gop_iframe_drop`**: Simple I-frame duplication (classic freeze effect)
-- **`flow_leaky`**: Optical flow warping (smooth trails, no codec manipulation)
-- **`bergman_style`**: Multi-clip datamosh with quality control (most common for art)
-- **`avidemux_style`**: Packet-level remux without re-encoding (strongest artifacts, requires Xvid/AVI)
-- **`video_to_image_mosh`/`image_to_video_mosh`**: Transition effects between video and stills
-- **`ui_keyframe_editor`**: Interactive curses UI for manual I-frame selection
-
-## Important Parameters
-
-- `--postcut N`: Frames to drop after each removed I-frame (default 6)
-- `--mosh_q N`: MPEG-4 quantizer for bergman_style (higher = blockier, default 8)
-- `--alpha N`: Flow blend factor for flow_leaky (default 0.85)
-- `--block N`: Block size for blockmatch_basic (default 16)
-
-## Adding New Algorithms
-
-1. Create `mosh_algorithms/your_algo.py` with `process(input_path, output_path, **kwargs)` function
-2. Register in `mosh_algorithms/__init__.py`: `ALGORITHMS['your_algo'] = your_algo.process`
-3. CLI args automatically mapped via function signature introspection
-
-## Critical Requirements
-
-- **avidemux_style**: All inputs must be identical Xvid/AVI format (same WxH, FPS, yuv420p). Use `convert_to_xvid.sh` to normalize first.
-- **FFmpeg/ffprobe**: Must be in PATH. Multi-clip algorithms use subprocess calls.
-- **blockmatch_basic**: Extremely slow (O(n²) search). Use only for small test clips.
