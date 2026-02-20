@@ -21,15 +21,6 @@ ALGORITHM_INFO = {
         "outputs": ".csv",
         "options": []
     },
-    "gop_iframe_drop": {
-        "name": "Simple I-Frame Drop",
-        "category": "basic",
-        "desc": "Removes I-frames (keyframes) from a single video. Re-encodes with FFmpeg.",
-        "use_case": "Quick datamosh effect on one clip. Good for testing, but Avidemux methods are stronger.",
-        "inputs": "single",
-        "outputs": ".mp4/.avi",
-        "options": ["gop", "codec", "verbose"]
-    },
     "gop_multi_drop_concat": {
         "name": "Multi-Clip Concat & Drop",
         "category": "basic",
@@ -38,15 +29,6 @@ ALGORITHM_INFO = {
         "inputs": "multiple",
         "outputs": ".mp4/.avi",
         "options": ["gop", "codec", "postcut", "postcut_rand", "hold_sec", "verbose"]
-    },
-    "ui_keyframe_editor": {
-        "name": "Interactive Keyframe Editor",
-        "category": "advanced",
-        "desc": "Curses-based TUI for frame-by-frame control. Toggle I-frames, jump between keyframes, preview frames, adjust postcut.",
-        "use_case": "Surgical precision - manually choose which keyframes to remove for artistic control.",
-        "inputs": "single",
-        "outputs": ".mp4/.avi",
-        "options": ["gop", "codec", "verbose"]
     },
     "video_to_image_mosh": {
         "name": "Video → Image Mosh",
@@ -66,6 +48,15 @@ ALGORITHM_INFO = {
         "outputs": ".mp4/.avi",
         "options": ["image", "img_dur", "kb_mode", "gop", "codec", "verbose"]
     },
+    "double_exposure": {
+        "name": "Double Exposure Blend",
+        "category": "creative",
+        "desc": "Blend two clips using overlay/add/subtract/darken/lighten with adjustable opacity.",
+        "use_case": "Layer two moving clips for double-exposure or composite-style effects.",
+        "inputs": "two",
+        "outputs": ".mp4/.avi",
+        "options": ["blend_mode", "opacity", "descartes", "gop", "codec", "verbose"]
+    },
     "avidemux_style": {
         "name": "Avidemux-Style Surgery (manual prep)",
         "category": "avidemux",
@@ -84,15 +75,6 @@ ALGORITHM_INFO = {
         "outputs": ".avi or .mp4",
         "options": ["mosh_q", "gop", "hold_sec", "postcut", "postcut_rand", "drop_mode", "codec", "audio_from", "verbose"]
     },
-    "mosh": {
-        "name": "P-Cascade Bloom Transition (Packet Surgery)",
-        "category": "transitions",
-        "desc": "EXTREME 'P-cascade bloom' datamosh transition using packet surgery. Creates dramatic melting effect where clip B begins.",
-        "use_case": "Maximum artifact strength for music video transitions - pure packet manipulation for extreme smear effects.",
-        "inputs": "two",
-        "outputs": ".avi and .mp4",
-        "options": ["fps", "width", "mosh_q", "gop_len", "no_iframe_window", "postcut", "repeat_boost", "repeat_times"]
-    },
     "mosh_zoom_oneclip": {
         "name": "Melting Zoom (Single Clip)",
         "category": "creative",
@@ -101,24 +83,6 @@ ALGORITHM_INFO = {
         "inputs": "single",
         "outputs": ".mp4",
         "options": ["fps", "width", "zoom_q", "zoom_t", "zoom_dur", "zoom_tail", "zoom_direction", "deliver_crf"]
-    },
-    "mosh_h264": {
-        "name": "H.264 Long-GOP Transition (Modern)",
-        "category": "transitions",
-        "desc": "Modern H.264 datamosh with IDR strip and SEI removal. Better compatibility than Xvid with extreme artifacts.",
-        "use_case": "Best of both worlds: extreme glitch effects with modern H.264 compression and universal playback.",
-        "inputs": "two",
-        "outputs": ".mp4",
-        "options": ["fps", "width", "h264_crf", "gop_len", "no_iframe_window", "postcut", "repeat_boost", "repeat_times"]
-    },
-    "ts_mosh": {
-        "name": "MPEG-TS Packet-Loss Mosh",
-        "category": "advanced",
-        "desc": "Creates datamosh by deleting Transport Stream packets in a time window. Pure packet corruption without re-encoding.",
-        "use_case": "Simulate network packet loss for realistic video corruption. Works on single clips with precise time control.",
-        "inputs": "single",
-        "outputs": ".mp4 or .avi",
-        "options": ["ts_format", "vbitrate", "keyint", "start_ms", "duration_ms", "ts_pps", "ts_pid", "xvid_q", "fps", "verbose"]
     },
     "aviglitch_mosh": {
         "name": "AviGlitch-Style Packet Mosh",
@@ -216,6 +180,25 @@ OPTION_INFO = {
         "choices": ["rotate", "zoom_in"],
         "prompt": "Image motion style",
         "help": "rotate: gentle rotation, zoom_in: slow zoom effect. Affects how the image 'moves'."
+    },
+    "blend_mode": {
+        "type": "choice",
+        "default": "overlay",
+        "choices": ["overlay", "add", "subtract", "darken", "lighten"],
+        "prompt": "Blend mode",
+        "help": "Overlay uses classic compositing; add/subtract/darken/lighten create stronger double-exposure effects."
+    },
+    "opacity": {
+        "type": "float",
+        "default": 0.5,
+        "prompt": "Opacity for clip B (0..1)",
+        "help": "Weighting of the second clip. 0.5 = 50/50 blend."
+    },
+    "descartes": {
+        "type": "bool",
+        "default": False,
+        "prompt": "Descartes mode (blend all clips in videosrc; output one per clip)",
+        "help": "Uses all clips in videosrc and writes a numbered output per clip."
     },
     "verbose": {
         "type": "bool",
@@ -411,6 +394,23 @@ def clear_screen():
     """Clear terminal screen."""
     os.system('clear' if os.name != 'nt' else 'cls')
 
+def ensure_tty_newline():
+    """Ensure Enter sends a newline on POSIX ttys (fixes stray ^M input)."""
+    if os.name == "nt" or not sys.stdin.isatty():
+        return
+    try:
+        import termios
+        fd = sys.stdin.fileno()
+        attrs = termios.tcgetattr(fd)
+        iflag = attrs[0]
+        iflag |= termios.ICRNL
+        iflag &= ~termios.IGNCR
+        attrs[0] = iflag
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except Exception:
+        # If we can't tweak tty settings, continue without failing
+        pass
+
 def print_header(title: str):
     """Print styled header."""
     print("\n" + "="*70)
@@ -513,8 +513,7 @@ def select_algorithm() -> str:
         "basic": [],
         "advanced": [],
         "creative": [],
-        "avidemux": [],
-        "transitions": []
+        "avidemux": []
     }
 
     for algo_id, info in ALGORITHM_INFO.items():
@@ -528,12 +527,11 @@ def select_algorithm() -> str:
         "basic": "⚡ Basic Datamosh",
         "advanced": "🎯 Advanced Control",
         "creative": "🎨 Creative Effects",
-        "avidemux": "💥 Avidemux-Style (Strongest)",
-        "transitions": "🌊 Transitions (P-Cascade)"
+        "avidemux": "💥 Avidemux-Style (Strongest)"
     }
 
     idx = 1
-    for cat in ["analysis", "basic", "advanced", "creative", "avidemux", "transitions"]:
+    for cat in ["analysis", "basic", "advanced", "creative", "avidemux"]:
         print(f"\n{category_names[cat]}:")
         for algo_id, info in categories[cat]:
             print(f"  [{idx}] {info['name']}")
@@ -750,6 +748,12 @@ def configure_options(algo_id: str, algo_info: Dict[str, Any]) -> Dict[str, Any]
     for opt_name in options:
         if opt_name not in OPTION_INFO:
             continue
+        if algo_id == "aviglitch_mosh":
+            # These options only make sense when their paired value exists.
+            if opt_name == "drop_end" and "drop_start" not in config:
+                continue
+            if opt_name == "dup_count" and "dup_at" not in config:
+                continue
 
         opt = OPTION_INFO[opt_name]
 
@@ -779,6 +783,38 @@ def configure_options(algo_id: str, algo_info: Dict[str, Any]) -> Dict[str, Any]
             if result:
                 config[opt_name] = result
 
+    if algo_id == "aviglitch_mosh":
+        # Keep paired options consistent.
+        has_drop_start = "drop_start" in config
+        has_drop_end = "drop_end" in config
+        if has_drop_start and not has_drop_end:
+            print("⚠️  Ignoring drop_start because drop_end was not provided.")
+            config.pop("drop_start", None)
+        if has_drop_end and not has_drop_start:
+            print("⚠️  Ignoring drop_end because drop_start was not provided.")
+            config.pop("drop_end", None)
+
+        # dup_count is only valid with dup_at.
+        if "dup_at" not in config:
+            config.pop("dup_count", None)
+
+        has_drop = "drop_start" in config and "drop_end" in config
+        has_dup = "dup_at" in config
+        if not has_drop and not has_dup:
+            print("\n⚠️  AviGlitch requires at least one operation: I-frame drop or P-frame duplication.")
+            if prompt_bool("Configure I-frame drop window now?", default=True):
+                while True:
+                    drop_start = prompt_float(OPTION_INFO["drop_start"]["prompt"], 2.0, OPTION_INFO["drop_start"]["help"])
+                    drop_end = prompt_float(OPTION_INFO["drop_end"]["prompt"], 4.0, OPTION_INFO["drop_end"]["help"])
+                    if drop_end > drop_start:
+                        config["drop_start"] = drop_start
+                        config["drop_end"] = drop_end
+                        break
+                    print("❌ Drop end must be greater than drop start")
+            else:
+                config["dup_at"] = prompt_float(OPTION_INFO["dup_at"]["prompt"], 3.0, OPTION_INFO["dup_at"]["help"])
+                config["dup_count"] = prompt_int(OPTION_INFO["dup_count"]["prompt"], OPTION_INFO["dup_count"]["default"], OPTION_INFO["dup_count"]["help"])
+
     return config
 
 def select_output(algo_info: Dict[str, Any], input_files: List[str]) -> str:
@@ -803,35 +839,6 @@ def select_output(algo_info: Dict[str, Any], input_files: List[str]) -> str:
 
 def build_command(algo_id: str, input_files: List[str], output: str, config: Dict[str, Any]) -> List[str]:
     """Build the command from configuration."""
-    # Special handling for mosh tool
-    if algo_id == "mosh":
-        cmd = ["python3", "mosh.py"]
-        cmd.extend(["--a", input_files[0]])
-        cmd.extend(["--b", input_files[1]])
-
-        # Add mosh-specific options
-        for key, value in config.items():
-            if value is not None and value != "":
-                # Convert option names
-                if key == "mosh_q":
-                    cmd.extend(["--q", str(value)])
-                elif key == "gop_len":
-                    cmd.extend(["--gop-len", str(value)])
-                elif key == "no_iframe_window":
-                    cmd.extend(["--no-iframe-window", str(value)])
-                elif key == "repeat_boost":
-                    cmd.extend(["--repeat-boost", str(value)])
-                elif key == "repeat_times":
-                    cmd.extend(["--repeat-times", str(value)])
-                elif key == "postcut":
-                    cmd.extend(["--postcut", str(value)])
-                elif key == "verbose" and value:
-                    cmd.append("-v")
-                else:
-                    cmd.extend([f"--{key}", str(value)])
-
-        return cmd
-
     # Special handling for mosh_zoom_oneclip tool
     if algo_id == "mosh_zoom_oneclip":
         cmd = ["python3", "mosh_zoom_oneclip.py"]
@@ -859,69 +866,6 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
                     cmd.extend([f"--{key}", str(value)])
 
         return cmd
-
-    # Special handling for mosh_h264 tool
-    if algo_id == "mosh_h264":
-        cmd = ["python3", "mosh_h264.py"]
-        cmd.extend(["--a", input_files[0]])
-        cmd.extend(["--b", input_files[1]])
-
-        # Add h264-specific options
-        for key, value in config.items():
-            if value is not None and value != "" and value is not False:
-                if key == "h264_crf":
-                    cmd.extend(["--crf", str(value)])
-                elif key == "gop_len":
-                    cmd.extend(["--gop-len", str(value)])
-                elif key == "no_iframe_window":
-                    cmd.extend(["--no-iframe-window", str(value)])
-                elif key == "repeat_boost":
-                    cmd.extend(["--repeat-boost", str(value)])
-                elif key == "repeat_times":
-                    cmd.extend(["--repeat-times", str(value)])
-                elif key == "postcut":
-                    cmd.extend(["--postcut", str(value)])
-                elif key == "verbose" and value:
-                    cmd.append("-v")
-                else:
-                    cmd.extend([f"--{key}", str(value)])
-
-        return cmd
-
-    # Special handling for ts_mosh tool
-    if algo_id == "ts_mosh":
-        cmd = ["python3", "ts_mosh.py"]
-        cmd.extend(["--in", input_files[0]])
-        cmd.extend(["--out", output])
-
-        # Add ts_mosh-specific options
-        for key, value in config.items():
-            if value is not None and value != "" and value is not False:
-                if key == "ts_format":
-                    cmd.extend(["--format", str(value)])
-                elif key == "vbitrate":
-                    cmd.extend(["--vbitrate", str(value)])
-                elif key == "keyint":
-                    cmd.extend(["--keyint", str(value)])
-                elif key == "start_ms":
-                    cmd.extend(["--start-ms", str(value)])
-                elif key == "duration_ms":
-                    cmd.extend(["--duration-ms", str(value)])
-                elif key == "ts_pps":
-                    cmd.extend(["--pps", str(value)])
-                elif key == "ts_pid" and value:
-                    cmd.extend(["--pid", str(value)])
-                elif key == "xvid_q":
-                    cmd.extend(["--xvid-q", str(value)])
-                elif key == "fps":
-                    cmd.extend(["--fps", str(value)])
-                elif key == "verbose" and value:
-                    cmd.append("-v")
-                else:
-                    cmd.extend([f"--{key}", str(value)])
-
-        return cmd
-
     # Special handling for aviglitch_mosh tool
     if algo_id == "aviglitch_mosh":
         cmd = ["python3", "aviglitch_mosh.py"]
@@ -939,18 +883,24 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
                     cmd.extend(["--prep-gop", str(value)])
                 elif key == "prep_fps":
                     cmd.extend(["--prep-fps", str(value)])
-                elif key == "drop_start":
-                    cmd.extend(["--drop-start", str(value)])
-                elif key == "drop_end":
-                    cmd.extend(["--drop-end", str(value)])
-                elif key == "dup_at":
-                    cmd.extend(["--dup-at", str(value)])
-                elif key == "dup_count":
-                    cmd.extend(["--dup-count", str(value)])
+                elif key in ("drop_start", "drop_end", "dup_at", "dup_count"):
+                    # Added as validated pairs below.
+                    continue
                 elif key == "verbose" and value:
                     cmd.append("-v")
                 else:
                     cmd.extend([f"--{key}", str(value)])
+
+        drop_start = config.get("drop_start")
+        drop_end = config.get("drop_end")
+        if drop_start is not None and drop_end is not None:
+            cmd.extend(["--drop-start", str(drop_start)])
+            cmd.extend(["--drop-end", str(drop_end)])
+
+        dup_at = config.get("dup_at")
+        if dup_at is not None:
+            cmd.extend(["--dup-at", str(dup_at)])
+            cmd.extend(["--dup-count", str(config.get("dup_count", OPTION_INFO["dup_count"]["default"]))])
 
         return cmd
 
@@ -1087,6 +1037,7 @@ def execute_multipass_aviglitch(input_files: List[str], base_config: Dict[str, A
 def main():
     """Main wizard flow."""
     try:
+        ensure_tty_newline()
         # Step 1: Select algorithm
         algo_id = select_algorithm()
         algo_info = ALGORITHM_INFO[algo_id]
@@ -1122,11 +1073,8 @@ def main():
                     pass_config = configure_pass_params(i)
                     pass_configs.append(pass_config)
 
-        # Step 4: Select output (skip for mosh/mosh_h264 - they have fixed output names)
-        if algo_id in ("mosh", "mosh_h264"):
-            output = None
-        else:
-            output = select_output(algo_info, input_files)
+        # Step 4: Select output
+        output = select_output(algo_info, input_files)
 
         # Step 5: Review and confirm
         clear_screen()
@@ -1158,12 +1106,7 @@ def main():
                     else:
                         print(f"    {key}: {value}")
         else:
-            if output:
-                print(f"Output:    {output}")
-            elif algo_id == "mosh":
-                print(f"Outputs:   out_longgop.avi, mosh_core.avi, mosh_final.avi, mosh_final.mp4")
-            elif algo_id == "mosh_h264":
-                print(f"Outputs:   out_longgop_h264.mp4, mosh_core_h264.mp4, mosh_final_h264.mp4")
+            print(f"Output:    {output}")
 
             if config:
                 print(f"\nOptions:")
