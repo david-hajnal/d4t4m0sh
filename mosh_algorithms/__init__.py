@@ -9,6 +9,8 @@ from .image_to_video_mosh import process as image_to_video_mosh
 from .avidemux_style import process as avidemux_style
 from .avidemux_style_all import process as avidemux_style_all
 from .randomizer import process as randomizer
+from .double_exposure import process as double_exposure
+from .color_fx_ffmpeg import process as color_fx_ffmpeg
 
 ALGORITHMS = {
     "gop_iframe_drop": gop_iframe_drop,
@@ -22,4 +24,6 @@ ALGORITHMS = {
     "avidemux_style": avidemux_style,
     "avidemux_style_all": avidemux_style_all,
     "randomizer": randomizer,
+    "double_exposure": double_exposure,
+    "color_fx_ffmpeg": color_fx_ffmpeg,
 }

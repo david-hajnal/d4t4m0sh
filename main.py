@@ -119,15 +119,39 @@ def main():
                     help="[avidemux_style] Start P-frame duplication after this timestamp (seconds). None = from beginning")
     parser.add_argument("--chunk_length", type=float, default=2.0,
                     help="[randomizer] Duration of each chunk in seconds (default: 2.0)")
+    parser.add_argument("--blend_mode", type=str, default="overlay",
+                        choices=["overlay", "add", "subtract", "darken", "lighten"],
+                        help="[double_exposure] Blend mode")
+    parser.add_argument("--opacity", type=float, default=0.5,
+                        help="[double_exposure] Opacity for clip B (0..1). 0.5 = 50/50 blend")
+    parser.add_argument("--descartes", action="store_true",
+                        help="[double_exposure] Blend every pair in videosrc, output one per pair")
+    parser.add_argument("--color_preset", type=str, default="urban_grit",
+                        choices=["urban_grit", "dirty_glass", "faded_teal_amber", "hard_shadow_split"],
+                        help="[color_fx_ffmpeg] Color treatment preset")
+    parser.add_argument("--fx_strength", type=float, default=1.0,
+                        help="[color_fx_ffmpeg] Effect strength (0.0-2.0)")
+    parser.add_argument("--grain", type=int, default=-1,
+                        help="[color_fx_ffmpeg] Film grain amount 0-60 (-1 uses preset default)")
+    parser.add_argument("--vignette", type=float, default=-1.0,
+                        help="[color_fx_ffmpeg] Vignette intensity 0.0-2.0 (-1 uses preset default)")
+    parser.add_argument("--ghost", type=float, default=-1.0,
+                        help="[color_fx_ffmpeg] Ghost/trail blend 0.0-1.0 (-1 uses preset default)")
+    parser.add_argument("--keep_audio", dest="keep_audio", action="store_true", default=True,
+                        help="[color_fx_ffmpeg] Keep audio in output (default)")
+    parser.add_argument("--no_keep_audio", dest="keep_audio", action="store_false",
+                        help="[color_fx_ffmpeg] Disable audio in output")
 
     args = parser.parse_args()
 
     # Algorithms that take multiple inputs
-    multi_algos = {"gop_multi_drop_concat", "bergman_style", "avidemux_style"}
+    multi_algos = {"gop_multi_drop_concat", "bergman_style", "avidemux_style", "double_exposure"}
 
     # Resolve inputs
     in_arg = args.file
-    if args.algorithm in multi_algos:
+    if args.algorithm == "double_exposure" and getattr(args, "descartes", False):
+        in_path = ""
+    elif args.algorithm in multi_algos:
         if in_arg and not args.scan:
             # comma-separated paths
             input_list = [p.strip() for p in in_arg.split(",") if p.strip()]
@@ -191,6 +215,16 @@ def main():
             img_dur=getattr(args, "img_dur", None),
             kb_mode=getattr(args, "kb", None),
             postcut=getattr(args, "postcut", None),
+            blend_mode=getattr(args, "blend_mode", None),
+            opacity=getattr(args, "opacity", None),
+            descartes=getattr(args, "descartes", None),
+            videosrc=getattr(args, "videosrc", None),
+            color_preset=getattr(args, "color_preset", None),
+            fx_strength=getattr(args, "fx_strength", None),
+            grain=getattr(args, "grain", None),
+            vignette=getattr(args, "vignette", None),
+            ghost=getattr(args, "ghost", None),
+            keep_audio=getattr(args, "keep_audio", None),
         )
 
         call_params.update({

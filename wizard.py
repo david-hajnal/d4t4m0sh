@@ -48,6 +48,15 @@ ALGORITHM_INFO = {
         "outputs": ".mp4/.avi",
         "options": ["image", "img_dur", "kb_mode", "gop", "codec", "verbose"]
     },
+    "color_fx_ffmpeg": {
+        "name": "Cinematic Color FX (FFmpeg)",
+        "category": "creative",
+        "desc": "Applies gritty, cinematic color grading presets inspired by the docs reference images.",
+        "use_case": "Grade footage before/after datamosh to get urban, dirty, faded, or hard-contrast looks.",
+        "inputs": "single",
+        "outputs": ".mp4/.avi",
+        "options": ["color_preset", "fx_strength", "grain", "vignette", "ghost", "keep_audio", "codec", "gop", "verbose"]
+    },
     "double_exposure": {
         "name": "Double Exposure Blend",
         "category": "creative",
@@ -180,6 +189,43 @@ OPTION_INFO = {
         "choices": ["rotate", "zoom_in"],
         "prompt": "Image motion style",
         "help": "rotate: gentle rotation, zoom_in: slow zoom effect. Affects how the image 'moves'."
+    },
+    "color_preset": {
+        "type": "choice",
+        "default": "urban_grit",
+        "choices": ["urban_grit", "dirty_glass", "faded_teal_amber", "hard_shadow_split"],
+        "prompt": "Color preset",
+        "help": "Preset style inspired by docs examples."
+    },
+    "fx_strength": {
+        "type": "float",
+        "default": 1.0,
+        "prompt": "Effect strength (0.0-2.0)",
+        "help": "1.0 = preset default. Lower for subtle grade, higher for stronger look."
+    },
+    "grain": {
+        "type": "int",
+        "default": -1,
+        "prompt": "Grain amount (0-60, or -1 for preset default)",
+        "help": "Use -1 to let the preset decide. Higher values add more film-like noise."
+    },
+    "vignette": {
+        "type": "float",
+        "default": -1.0,
+        "prompt": "Vignette strength (0.0-2.0, or -1 for preset default)",
+        "help": "Darkens edges. Use -1 to keep preset behavior."
+    },
+    "ghost": {
+        "type": "float",
+        "default": -1.0,
+        "prompt": "Ghosting blend (0.0-1.0, or -1 for preset default)",
+        "help": "Adds subtle frame trails. Use -1 to keep preset behavior."
+    },
+    "keep_audio": {
+        "type": "bool",
+        "default": True,
+        "prompt": "Keep audio track",
+        "help": "If disabled, output video will be silent."
     },
     "blend_mode": {
         "type": "choice",
@@ -864,6 +910,27 @@ def build_command(algo_id: str, input_files: List[str], output: str, config: Dic
                     cmd.append("-v")
                 else:
                     cmd.extend([f"--{key}", str(value)])
+
+        return cmd
+    # Special handling for color_fx_ffmpeg
+    if algo_id == "color_fx_ffmpeg":
+        cmd = ["python3", "main.py", "-a", "color_fx_ffmpeg"]
+        cmd.extend(["-f", input_files[0]])
+        cmd.extend(["-o", output])
+
+        for key, value in config.items():
+            if value is None or value == "":
+                continue
+            if key == "keep_audio":
+                if not value:
+                    cmd.append("--no_keep_audio")
+            elif key == "verbose":
+                if value:
+                    cmd.append("-v")
+            else:
+                if value is False:
+                    continue
+                cmd.extend([f"--{key}", str(value)])
 
         return cmd
     # Special handling for aviglitch_mosh tool
